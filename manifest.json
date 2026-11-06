@@ -1,0 +1,25 @@
+{
+  "name": "コラボジャパン 議事録AI",
+  "short_name": "議事録AI",
+  "description": "協同組合コラボジャパン 会議録音＆AI議事録一括生成アプリ",
+  "start_url": "./mobile.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
