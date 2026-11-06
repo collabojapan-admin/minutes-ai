@@ -1,0 +1,1888 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>コラボジャパン 議事録AI</title>
+  
+  <!-- PWA Meta Tags -->
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="議事録AI">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="icon" type="image/png" href="./icon-192.png">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .safe-top { padding-top: env(safe-area-inset-top, 16px); }
+    .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 16px); }
+    body { -webkit-tap-highlight-color: transparent; }
+  
+    /* スマホ画面モックアップ用スタイル (マニュアル内蔵) */
+    .phone-mock {
+      border: 6px solid #1e293b;
+      border-radius: 32px;
+      overflow: hidden;
+      box-shadow: 0 15px 25px -10px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      background: #0f172a;
+      position: relative;
+    }
+    .phone-mock::before {
+      content: '';
+      position: absolute;
+      top: 6px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 50px;
+      height: 10px;
+      background: #1e293b;
+      border-radius: 6px;
+      z-index: 20;
+    }
+    @keyframes tapAnimation {
+      0%, 100% { transform: scale(1) translateY(0); }
+      50% { transform: scale(0.9) translateY(4px); }
+    }
+    .tap-indicator {
+      animation: tapAnimation 1.5s infinite ease-in-out;
+    }
+
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-indigo-500 selection:text-white">
+
+  <!-- ヘッダー -->
+    <!-- トップ固定ヘッダー -->
+  <header class="bg-slate-900/95 backdrop-blur-md border-b border-slate-800 sticky top-0 z-30 safe-top">
+    <div class="px-3.5 py-2.5 flex items-center justify-between gap-2">
+      <!-- 左側：アプリアイコン＆タイトル（改行なし） -->
+      <div class="flex items-center gap-2 min-w-0 shrink">
+        <div class="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center text-sm shadow-md shadow-indigo-950 shrink-0">
+          🎙️
+        </div>
+        <div class="truncate">
+          <h1 class="text-xs font-bold text-white leading-tight truncate">議事録AI</h1>
+        </div>
+      </div>
+
+      <!-- 右側：バッジ＆ボタン群（絶対に改行しない flex-nowrap shrink-0） -->
+      <div class="flex items-center gap-1.5 shrink-0 flex-nowrap">
+        <!-- 接続状態ピル（タップで即時再チェック） -->
+        <div id="mobile-status-pill" onclick="manualCheckServerHealth()" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0" title="タップで接続再チェック">
+          <span id="mobile-status-dot" class="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+          <span id="mobile-status-text" class="whitespace-nowrap">接続確認中...</span>
+        </div>
+
+        <!-- 使い方マニュアルボタン -->
+        <button type="button" onclick="openManualModal()" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-950 text-indigo-300 border border-indigo-700/60 flex items-center gap-1 hover:bg-indigo-900 transition shadow-sm cursor-pointer whitespace-nowrap shrink-0">
+          <span>📖</span>
+          <span class="whitespace-nowrap">使い方</span>
+        </button>
+
+        <!-- 強制更新リロードボタン -->
+        <button type="button" onclick="forceAppRefresh()" class="w-5 h-5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center transition shadow-sm cursor-pointer shrink-0" title="最新状態に更新">
+          <span id="refresh-icon" class="text-[10px] leading-none">🔄</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- トースト通知 -->
+  <div id="toast-container" class="fixed top-16 left-4 right-4 z-50 flex flex-col items-center gap-2 pointer-events-none"></div>
+
+  <!-- 未送信キュー案内バナー（保留データがある場合に表示） -->
+  <div id="pending-alert-banner" class="hidden bg-gradient-to-r from-amber-950/90 via-indigo-950/90 to-amber-950/90 border-b border-amber-600/50 px-4 py-2 text-xs flex items-center justify-between text-amber-200">
+    <div class="flex items-center gap-1.5 truncate">
+      <span class="text-base animate-bounce">💾</span>
+      <span class="truncate">PC未送信の録音データが <strong id="banner-pending-count" class="text-white font-bold">0</strong> 件あります</span>
+    </div>
+    <button type="button" onclick="switchMobileTab('queue')" class="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[11px] font-bold shrink-0 transition shadow">
+      キュー確認
+    </button>
+  </div>
+
+  <!-- メインコンテンツ -->
+  <main class="flex-1 px-4 py-4 max-w-lg mx-auto w-full pb-24">
+
+    <!-- ================================================================= -->
+    <!-- VIEW 1: 録音・作成画面 -->
+    <!-- ================================================================= -->
+    <div id="view-record" class="space-y-4">
+      
+      <!-- 会議情報入力カード -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+            <span>📝</span> 会議・面談の情報
+          </h2>
+          <span class="text-[10px] text-slate-500">※未入力でも即時録音可能</span>
+        </div>
+
+        <div class="space-y-2.5">
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">会議タイトル</label>
+            <input type="text" id="m-title" placeholder="例: 株式会社○○ 定期監査 / 内部定例" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500">
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1">会議種別</label>
+              <select id="m-category" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500">
+                <option value="企業面談・定期監査">🏢 企業定期監査</option>
+                <option value="内部定例ミーティング" selected>👥 内部定例</option>
+                <option value="外国人面談・生活指導">🌏 外国人面談</option>
+                <option value="労基・機構・トラブル対応">⚖️ トラブル対応</option>
+                <option value="一般打ち合わせ">📝 一般打ち合わせ</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1">対象企業 (SSOT)</label>
+              <select id="m-company" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500">
+                <option value="">（該当なし・内部）</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">出席者</label>
+            <input type="text" id="m-attendees" placeholder="例: 竹内大吾, ○○社長, 指導員" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500">
+          </div>
+        </div>
+      </div>
+
+      <!-- 録音コントローラーカード -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col items-center justify-center text-center space-y-4">
+        
+        <!-- タイマー表示 -->
+        <div>
+          <div id="m-timer" class="text-4xl font-mono font-bold text-white tracking-widest">00:00:00</div>
+          <div id="m-pulse" class="hidden items-center justify-center gap-1.5 mt-2 text-xs font-semibold text-rose-400">
+            <span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+            録音中（音声を収音しています）
+          </div>
+          <p id="m-offline-hint" class="text-[11px] text-slate-400 mt-1">※PCがシャットダウンしていてもスマホ単体で安全に録音できます</p>
+        </div>
+
+        <!-- 巨大録音ボタン -->
+        <div class="relative py-2">
+          <button type="button" id="m-record-btn" onclick="toggleRecording()" class="w-24 h-24 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center shadow-xl shadow-rose-950/70 transition-transform active:scale-95 border-4 border-slate-900">
+            <span id="m-record-icon" class="text-3xl">⏺️</span>
+            <span id="m-record-label" class="text-[11px] font-bold mt-1">録音開始</span>
+          </button>
+        </div>
+
+        <!-- またはファイル選択 -->
+        <div class="w-full pt-1 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+          <span>既存の音声ファイルを投入:</span>
+          <label class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 rounded-lg cursor-pointer font-medium">
+            ファイル選択
+            <input type="file" id="m-file-input" accept="audio/*,.m4a,.mp3,.wav,.webm" class="hidden" onchange="handleMobileFile(event)">
+          </label>
+        </div>
+
+        <!-- 音声プレビュー（録音完了時） -->
+        <div id="m-preview-box" class="hidden w-full bg-slate-950/90 border border-slate-800 rounded-xl p-3 space-y-2 text-left">
+          <div class="flex items-center justify-between text-xs text-slate-300">
+            <span id="m-preview-name" class="font-medium truncate max-w-[200px]">録音データ</span>
+            <span id="m-preview-size" class="text-[11px] text-slate-500">0 MB</span>
+          </div>
+          <audio id="m-audio-player" controls class="w-full h-8"></audio>
+          <div class="text-[10px] text-emerald-400 flex items-center gap-1 font-medium">
+            <span>🛡️</span> スマホ内ローカルDB（IndexedDB）に安全保存済み
+          </div>
+        </div>
+
+        <!-- AI生成ボタン -->
+        <button type="button" id="m-generate-btn" onclick="triggerMobileGenerate()" disabled class="w-full py-3.5 bg-slate-800 text-slate-500 rounded-xl text-xs font-bold shadow-lg transition flex items-center justify-center gap-2 cursor-not-allowed">
+          <span>✨</span> AI議事録・決定事項・TODOを一括生成
+        </button>
+
+        <!-- 進行中表示 -->
+        <div id="m-loading-box" class="hidden w-full bg-indigo-950/60 border border-indigo-700/50 rounded-xl p-4 text-center space-y-2">
+          <div class="flex items-center justify-center gap-2 text-xs font-bold text-indigo-200">
+            <svg class="animate-spin h-4 w-4 text-indigo-400" viewBox="0 0 24 24" fill="none">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span id="m-loading-title">Gemini 2.5 Flash で解析・議事録作成中...</span>
+          </div>
+          <p class="text-[10px] text-slate-400">※長尺音声も約15〜30秒で完了します</p>
+        </div>
+      </div>
+
+      <!-- 生成結果エディタカード -->
+      <div id="m-result-box" class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
+            <span>📜</span> 生成結果（直接編集可能）
+          </h3>
+          <div class="flex items-center gap-1.5">
+            <button type="button" onclick="copyMobileResult()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] font-medium border border-slate-700 flex items-center gap-1">
+              <span>📋</span> コピー
+            </button>
+            <button type="button" onclick="downloadMobileDocx()" class="px-2.5 py-1 bg-blue-700 hover:bg-blue-600 text-white rounded-lg text-[11px] font-semibold flex items-center gap-1">
+              <span>📄</span> Word
+            </button>
+          </div>
+        </div>
+
+        <textarea id="m-editor" rows="14" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-200 leading-relaxed focus:outline-none focus:border-indigo-500"></textarea>
+
+        <button type="button" onclick="saveMobileEdited()" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5">
+          <span>💾</span> 編集内容をObsidian ＆ Wordに保存
+        </button>
+      </div>
+
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- VIEW 2: 保留キュー（オフライン録音データ一覧） -->
+    <!-- ================================================================= -->
+    <div id="view-queue" class="hidden space-y-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <div>
+            <h2 class="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>⚡</span> スマホ内 保留キュー（PC未送信）
+            </h2>
+            <p class="text-[10px] text-slate-400">PCオフ時に録音された音声データ。PC起動時に一括生成できます</p>
+          </div>
+          <span id="queue-badge-count" class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">0件</span>
+        </div>
+
+        <!-- 全件一括送信ボタン -->
+        <button type="button" id="queue-sync-all-btn" onclick="syncAllQueueItems()" disabled class="w-full py-3 bg-slate-800 text-slate-500 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-not-allowed">
+          <span>⚡</span> 保留中の全録音をまとめてAI議事録生成
+        </button>
+
+        <!-- 一括進捗バー -->
+        <div id="queue-progress-box" class="hidden bg-slate-950 border border-indigo-700/60 rounded-xl p-3 space-y-1.5">
+          <div class="flex items-center justify-between text-[11px] text-indigo-300">
+            <span id="queue-progress-status">一括同期を実行中...</span>
+            <span id="queue-progress-count">1/1</span>
+          </div>
+          <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+            <div id="queue-progress-bar" class="bg-indigo-500 h-full transition-all duration-300" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- キューリスト -->
+        <div id="queue-items-list" class="space-y-2.5 pt-1">
+          <div class="p-6 text-center text-xs text-slate-500">保留中の録音データはありません</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- VIEW 3: 過去履歴アーカイブ画面 -->
+    <!-- ================================================================= -->
+    <div id="view-archive" class="hidden space-y-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <h2 class="text-xs font-bold text-white flex items-center gap-1.5">
+            <span>📚</span> 過去の議事録アーカイブ
+          </h2>
+          <span id="m-archive-count" class="text-[11px] text-indigo-400 font-bold">0件</span>
+        </div>
+
+        <input type="text" id="m-search" oninput="renderMobileArchive()" placeholder="キーワード・企業名で検索..." class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+
+        <div id="m-archive-list" class="space-y-2 pt-1 max-h-[550px] overflow-y-auto">
+          <div class="p-6 text-center text-xs text-slate-500">読み込み中...</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ボトムタブナビゲーション（3タブアプリ風） -->
+  <nav class="bg-slate-900/95 backdrop-blur-md border-t border-slate-800 fixed bottom-0 left-0 right-0 z-30 safe-bottom">
+    <div class="max-w-lg mx-auto flex items-center justify-around py-2">
+      <button type="button" id="tab-btn-record" onclick="switchMobileTab('record')" class="flex flex-col items-center gap-1 text-indigo-400 font-bold transition">
+        <span class="text-lg">🎙️</span>
+        <span class="text-[10px]">録音・作成</span>
+      </button>
+      <button type="button" id="tab-btn-queue" onclick="switchMobileTab('queue')" class="relative flex flex-col items-center gap-1 text-slate-400 hover:text-slate-200 transition">
+        <span class="text-lg">⚡</span>
+        <span class="text-[10px]">保留キュー</span>
+        <span id="nav-queue-badge" class="hidden absolute top-0 right-2 w-4 h-4 bg-amber-500 text-slate-950 font-bold text-[9px] rounded-full flex items-center justify-center">0</span>
+      </button>
+      <button type="button" id="tab-btn-archive" onclick="switchMobileTab('archive')" class="flex flex-col items-center gap-1 text-slate-400 hover:text-slate-200 transition">
+        <span class="text-lg">📚</span>
+        <span class="text-[10px]">過去履歴</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- JavaScript -->
+  <script>
+    // PWA Service Worker 登録
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').then(reg => {
+          reg.update();
+        }).catch(err => console.log('SW registration:', err));
+      });
+    }
+
+    // =========================================================================
+    // IndexedDB モジュール（大容量ローカル音声保管）
+    // =========================================================================
+    const DB_NAME = 'CollaboMinutesDB';
+    const DB_VERSION = 1;
+    const STORE_NAME = 'pending_recordings';
+
+    function openIndexedDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = e => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+            store.createIndex('status', 'status', { unique: false });
+            store.createIndex('createdAt', 'createdAt', { unique: false });
+          }
+        };
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e.target.error);
+      });
+    }
+
+    async function dbSaveRecording(record) {
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        store.put(record);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function dbGetAllRecordings() {
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbGetRecording(id) {
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.get(id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbDeleteRecording(id) {
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        store.delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    // =========================================================================
+    // 状態管理
+    // =========================================================================
+    let mAudioBlob = null;
+    let mAudioName = "";
+    let mMinutesId = "";
+    let mMediaRecorder = null;
+    let mAudioChunks = [];
+    let mTimerInterval = null;
+    let mSeconds = 0;
+    let mIsRecording = false;
+    let mArchiveRecords = [];
+    let mPendingQueue = [];
+    let isServerOnline = false;
+    let activeQueueRecordId = null;
+    let currentApiBase = localStorage.getItem('collabo_api_base') || '';
+    let lastEndpointFetchAt = 0;
+
+    function isStaticCloudHost() {
+      return window.location.hostname.endsWith('github.io');
+    }
+
+    function getApiUrl(path) {
+      if (isStaticCloudHost() || currentApiBase) {
+        const base = (currentApiBase || '').replace(/\/+$/, '');
+        return base ? (base + path) : path;
+      }
+      return path;
+    }
+
+    // クラウド上の endpoint.json から現在の事務所PCトンネルURLを自動解決
+    async function resolveApiBase(force = false) {
+      if (!isStaticCloudHost() && !force) {
+        return currentApiBase;
+      }
+      const now = Date.now();
+      if (!force && currentApiBase && (now - lastEndpointFetchAt < 15000)) {
+        return currentApiBase;
+      }
+      lastEndpointFetchAt = now;
+
+      // 1. GitHub Contents API (キャッシュ遅延ゼロ・即時反映)
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 2500);
+        const res = await fetch('https://api.github.com/repos/collabojapan-admin/minutes-ai/contents/endpoint.json?t=' + now, {
+          cache: 'no-store',
+          signal: ctrl.signal
+        });
+        clearTimeout(t);
+        if (res.ok) {
+          const meta = await res.json();
+          if (meta && meta.content) {
+            const decoded = JSON.parse(atob(meta.content.replace(/\s/g, '')));
+            if (decoded && decoded.tunnel_url) {
+              currentApiBase = decoded.tunnel_url.replace(/\/+$/, '');
+              localStorage.setItem('collabo_api_base', currentApiBase);
+              return currentApiBase;
+            }
+          }
+        }
+      } catch (e) {}
+
+      // 2. フォールバック: 同一オリジンの ./endpoint.json
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 2000);
+        const res = await fetch('./endpoint.json?t=' + now, {
+          cache: 'no-store',
+          signal: ctrl.signal
+        });
+        clearTimeout(t);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.tunnel_url) {
+            currentApiBase = data.tunnel_url.replace(/\/+$/, '');
+            localStorage.setItem('collabo_api_base', currentApiBase);
+            return currentApiBase;
+          }
+        }
+      } catch (e) {}
+
+      return currentApiBase;
+    }
+
+    // 初期起動
+    document.addEventListener('DOMContentLoaded', async () => {
+      await refreshPendingQueue();
+      await checkServerHealth(true);
+      await loadMobileCompanies();
+      await loadMobileArchive();
+      setInterval(() => checkServerHealth(false), 6000); // 6秒おきにPCサーバー生存監視
+    });
+
+    // サーバー導通チェック
+    async function checkServerHealth(forceResolve = false) {
+      const pill = document.getElementById('mobile-status-pill');
+      const dot = document.getElementById('mobile-status-dot');
+      const txt = document.getElementById('mobile-status-text');
+      const wasOnline = isServerOnline;
+
+      if (isStaticCloudHost() || forceResolve) {
+        await resolveApiBase(forceResolve);
+      }
+
+      async function pingConfig(base) {
+        const url = (base ? base.replace(/\/+$/, '') : '') + '/api/minutes/config?t=' + Date.now();
+        const ctrl = new AbortController();
+        const timeout = setTimeout(() => ctrl.abort(), 3000);
+        try {
+          const res = await fetch(url, {
+            cache: 'no-store',
+            signal: ctrl.signal
+          });
+          clearTimeout(timeout);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.success === true && !data.offline) {
+              return true;
+            }
+          }
+        } catch (e) {
+          clearTimeout(timeout);
+        }
+        return false;
+      }
+
+      let ok = false;
+      if (!isStaticCloudHost()) {
+        ok = await pingConfig('');
+        if (ok) {
+          currentApiBase = '';
+        }
+      }
+
+      if (!ok) {
+        if (currentApiBase) {
+          ok = await pingConfig(currentApiBase);
+        }
+        if (!ok) {
+          const freshBase = await resolveApiBase(true);
+          if (freshBase) {
+            ok = await pingConfig(freshBase);
+          }
+        }
+      }
+
+      if (ok) {
+        isServerOnline = true;
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0';
+        txt.textContent = 'PC接続中 (オンライン)';
+        pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
+        updateGenerateBtnState();
+        renderQueueItems();
+        if (!wasOnline) {
+          loadMobileCompanies();
+          loadMobileArchive();
+        }
+        return;
+      }
+
+      // サーバー不達・オフライン時の確実なUI反映
+      isServerOnline = false;
+      dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0';
+      txt.textContent = 'オフライン (スマホ内保存)';
+      pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
+      updateGenerateBtnState();
+      renderQueueItems();
+    }
+
+    // 手動で接続状態を再チェック
+    async function manualCheckServerHealth() {
+      const dot = document.getElementById('mobile-status-dot');
+      const txt = document.getElementById('mobile-status-text');
+      dot.className = 'w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping shrink-0';
+      txt.textContent = '確認中...';
+      await checkServerHealth(true);
+      if (isServerOnline) {
+        showToast('PCと正常に接続されています（オンライン）', 'success');
+      } else {
+        showToast('サーバー停止中（オフライン・スマホ内保存）', 'warning');
+      }
+    }
+
+    // アプリの強制最新化リフレッシュ（キャッシュクリア＆即時更新）
+    async function forceAppRefresh() {
+      const icon = document.getElementById('refresh-icon');
+      if (icon) icon.classList.add('animate-spin');
+      showToast('最新プログラムを取得中...', 'info');
+
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const reg of regs) {
+            await reg.update();
+          }
+        }
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          for (const key of keys) {
+            if (!key.includes('v9')) {
+              await caches.delete(key);
+            }
+          }
+        }
+      } catch (e) {}
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    }
+
+    function updateGenerateBtnState() {
+      const btn = document.getElementById('m-generate-btn');
+      if (!mAudioBlob) {
+        btn.disabled = true;
+        btn.className = 'w-full py-3.5 bg-slate-800 text-slate-500 rounded-xl text-xs font-bold shadow-lg transition flex items-center justify-center gap-2 cursor-not-allowed';
+        return;
+      }
+
+      if (isServerOnline) {
+        btn.disabled = false;
+        btn.className = 'w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-950/70 transition flex items-center justify-center gap-2 cursor-pointer';
+        btn.innerHTML = '<span>✨</span> AI議事録・決定事項・TODOを一括生成';
+      } else {
+        btn.disabled = false;
+        btn.className = 'w-full py-3.5 bg-amber-700 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-lg shadow-amber-950/70 transition flex items-center justify-center gap-2 cursor-pointer';
+        btn.innerHTML = '<span>💾</span> スマホ保留キューに保存（PC接続待ち）';
+      }
+    }
+
+    // 保留キューのリロード＆表示更新
+    async function refreshPendingQueue() {
+      try {
+        const all = await dbGetAllRecordings();
+        mPendingQueue = all.filter(r => r.status === 'pending');
+        mPendingQueue.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+        // バッジ更新
+        const count = mPendingQueue.length;
+        const banner = document.getElementById('pending-alert-banner');
+        const bCount = document.getElementById('banner-pending-count');
+        const qBadge = document.getElementById('queue-badge-count');
+        const navBadge = document.getElementById('nav-queue-badge');
+
+        qBadge.textContent = `${count}件`;
+        if (count > 0) {
+          banner.classList.remove('hidden');
+          bCount.textContent = count;
+          navBadge.classList.remove('hidden');
+          navBadge.textContent = count;
+        } else {
+          banner.classList.add('hidden');
+          navBadge.classList.add('hidden');
+        }
+
+        renderQueueItems();
+      } catch (e) {
+        console.error('Queue refresh error:', e);
+      }
+    }
+
+    // トースト表示
+    function showToast(msg, type = 'info') {
+      const c = document.getElementById('toast-container');
+      const t = document.createElement('div');
+      t.className = `px-4 py-2.5 rounded-xl text-xs font-semibold shadow-xl flex items-center gap-1.5 transition duration-300 ${
+        type === 'success' ? 'bg-emerald-900 text-emerald-100 border border-emerald-600' :
+        type === 'error' ? 'bg-rose-900 text-rose-100 border border-rose-600' :
+        'bg-slate-800 text-white border border-slate-700'
+      }`;
+      t.innerHTML = `<span>${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span><span>${msg}</span>`;
+      c.appendChild(t);
+      setTimeout(() => {
+        t.style.opacity = '0';
+        setTimeout(() => t.remove(), 300);
+      }, 3500);
+    }
+
+    // タブ切り替え
+    function switchMobileTab(tab) {
+      document.querySelectorAll('#view-record, #view-queue, #view-archive').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('#tab-btn-record, #tab-btn-queue, #tab-btn-archive').forEach(b => {
+        b.className = b.className.replace('text-indigo-400 font-bold', 'text-slate-400');
+      });
+
+      const activeView = document.getElementById('view-' + tab);
+      const activeBtn = document.getElementById('tab-btn-' + tab);
+      if (activeView && activeBtn) {
+        activeView.classList.remove('hidden');
+        activeBtn.className = activeBtn.className.replace('text-slate-400', 'text-indigo-400 font-bold');
+      }
+
+      if (tab === 'queue') refreshPendingQueue();
+      if (tab === 'archive') loadMobileArchive();
+    }
+
+    // 企業マスター読み込み
+    async function loadMobileCompanies() {
+      const sel = document.getElementById('m-company');
+      // まずキャッシュがあれば即時展開（オフラインでも即座に企業選択肢を表示）
+      try {
+        const cached = localStorage.getItem('collabo_cached_companies');
+        if (cached) {
+          const list = JSON.parse(cached);
+          if (Array.isArray(list) && list.length > 0) {
+            let html = '<option value="">（該当なし・内部）</option>';
+            list.forEach(c => { html += `<option value="${c.name}">${c.name}</option>`; });
+            sel.innerHTML = html;
+          }
+        }
+      } catch (e) {}
+
+      // サーバーがオンラインなら最新企業マスターを取得してキャッシュ更新
+      try {
+        const res = await fetch(getApiUrl('/api/minutes/companies'));
+        const d = await res.json();
+        if (d.success && Array.isArray(d.companies)) {
+          let html = '<option value="">（該当なし・内部）</option>';
+          d.companies.forEach(c => {
+            html += `<option value="${c.name}">${c.name}</option>`;
+          });
+          sel.innerHTML = html;
+          localStorage.setItem('collabo_cached_companies', JSON.stringify(d.companies));
+        }
+      } catch (e) {}
+    }
+
+    // 録音開始/停止トグル (100% オフラインセーフ)
+    async function toggleRecording() {
+      if (!mIsRecording) {
+        // 録音開始
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mAudioChunks = [];
+          mMediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+          mMediaRecorder.ondataavailable = e => {
+            if (e.data && e.data.size > 0) mAudioChunks.push(e.data);
+          };
+          mMediaRecorder.onstop = async () => {
+            mAudioBlob = new Blob(mAudioChunks, { type: 'audio/webm' });
+            mAudioName = `現場録音_${new Date().toISOString().slice(0,10)}_${new Date().toTimeString().slice(0,8).replace(/:/g,'')}.webm`;
+            
+            // 停止直後に【即座にIndexedDBへ安全保存】（アプリが閉じても消えない）
+            activeQueueRecordId = 'rec_' + Date.now();
+            const title = document.getElementById('m-title').value.trim() || '現場打ち合わせ';
+            const category = document.getElementById('m-category').value;
+            const company = document.getElementById('m-company').value;
+            const attendees = document.getElementById('m-attendees').value.trim();
+
+            const record = {
+              id: activeQueueRecordId,
+              title: title,
+              category: category,
+              company: company,
+              attendees: attendees,
+              audioBlob: mAudioBlob,
+              audioName: mAudioName,
+              audioMime: 'audio/webm',
+              sizeBytes: mAudioBlob.size,
+              durationSec: mSeconds,
+              createdAt: new Date().toISOString(),
+              status: 'pending'
+            };
+
+            await dbSaveRecording(record);
+            await refreshPendingQueue();
+
+            setMobilePreview(mAudioBlob, mAudioName);
+
+            if (isServerOnline) {
+              showToast('録音完了！PCサーバーへ接続可能です。「AI生成」を押してください。', 'success');
+            } else {
+              showToast('録音完了！スマホ内に安全に保存しました（PC接続時に生成可能）。', 'success');
+            }
+          };
+
+          mMediaRecorder.start(1000);
+          mIsRecording = true;
+          mSeconds = 0;
+          updateMobileTimer();
+          mTimerInterval = setInterval(() => {
+            mSeconds++;
+            updateMobileTimer();
+          }, 1000);
+
+          document.getElementById('m-record-icon').textContent = '⏹️';
+          document.getElementById('m-record-label').textContent = '停止';
+          document.getElementById('m-record-btn').className = 'w-24 h-24 rounded-full bg-slate-800 text-rose-400 border-4 border-rose-600 flex flex-col items-center justify-center shadow-xl transition-transform active:scale-95 animate-pulse';
+          document.getElementById('m-pulse').classList.remove('hidden');
+          document.getElementById('m-pulse').classList.add('flex');
+          showToast('マイク録音を開始しました', 'info');
+        } catch (err) {
+          showToast('マイクアクセスが許可されていません: ' + err.message, 'error');
+        }
+      } else {
+        // 録音停止
+        if (mMediaRecorder && mMediaRecorder.state !== 'inactive') {
+          mMediaRecorder.stop();
+          mMediaRecorder.stream.getTracks().forEach(t => t.stop());
+        }
+        if (mTimerInterval) {
+          clearInterval(mTimerInterval);
+          mTimerInterval = null;
+        }
+        mIsRecording = false;
+        document.getElementById('m-record-icon').textContent = '⏺️';
+        document.getElementById('m-record-label').textContent = '再録音';
+        document.getElementById('m-record-btn').className = 'w-24 h-24 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center shadow-xl border-4 border-slate-900 transition-transform active:scale-95';
+        document.getElementById('m-pulse').classList.remove('flex');
+        document.getElementById('m-pulse').classList.add('hidden');
+      }
+    }
+
+    function updateMobileTimer() {
+      const h = String(Math.floor(mSeconds / 3600)).padStart(2, '0');
+      const m = String(Math.floor((mSeconds % 3600) / 60)).padStart(2, '0');
+      const s = String(mSeconds % 60).padStart(2, '0');
+      document.getElementById('m-timer').textContent = `${h}:${m}:${s}`;
+    }
+
+    // ファイル選択
+    async function handleMobileFile(e) {
+      if (e.target.files && e.target.files.length > 0) {
+        const file = e.target.files[0];
+        mAudioBlob = file;
+        mAudioName = file.name;
+
+        activeQueueRecordId = 'rec_' + Date.now();
+        const title = document.getElementById('m-title').value.trim() || file.name.replace(/\.[^/.]+$/, "");
+        const category = document.getElementById('m-category').value;
+        const company = document.getElementById('m-company').value;
+        const attendees = document.getElementById('m-attendees').value.trim();
+
+        const record = {
+          id: activeQueueRecordId,
+          title: title,
+          category: category,
+          company: company,
+          attendees: attendees,
+          audioBlob: file,
+          audioName: file.name,
+          audioMime: file.type || 'audio/m4a',
+          sizeBytes: file.size,
+          durationSec: 0,
+          createdAt: new Date().toISOString(),
+          status: 'pending'
+        };
+
+        await dbSaveRecording(record);
+        await refreshPendingQueue();
+
+        setMobilePreview(file, file.name);
+        showToast(`音声ファイル「${file.name}」を保存しました`, 'info');
+      }
+    }
+
+    function setMobilePreview(blob, name) {
+      const box = document.getElementById('m-preview-box');
+      const player = document.getElementById('m-audio-player');
+      const nameEl = document.getElementById('m-preview-name');
+      const sizeEl = document.getElementById('m-preview-size');
+
+      nameEl.textContent = name;
+      sizeEl.textContent = `(${(blob.size / (1024*1024)).toFixed(2)} MB)`;
+      player.src = URL.createObjectURL(blob);
+      box.classList.remove('hidden');
+
+      updateGenerateBtnState();
+    }
+
+    // AI議事録生成トリガー（オンラインなら即実行、オフラインならキュー案内）
+    async function triggerMobileGenerate() {
+      if (!mAudioBlob) {
+        showToast('音声データがありません', 'error');
+        return;
+      }
+
+      await checkServerHealth();
+      if (!isServerOnline) {
+        showToast('現在PCサーバーがオフラインです。録音は安全にスマホ内に保存されています。PC起動時に生成してください。', 'info');
+        switchMobileTab('queue');
+        return;
+      }
+
+      const title = document.getElementById('m-title').value.trim() || '現場打ち合わせ';
+      const category = document.getElementById('m-category').value;
+      const company = document.getElementById('m-company').value;
+      const attendees = document.getElementById('m-attendees').value.trim();
+
+      await executeGenerateApi(mAudioBlob, mAudioName, title, category, company, attendees, activeQueueRecordId);
+    }
+
+    // 実際のAPI送信・AI生成処理
+    async function executeGenerateApi(blob, filename, title, category, company, attendees, queueId) {
+      const genBtn = document.getElementById('m-generate-btn');
+      const loading = document.getElementById('m-loading-box');
+      genBtn.disabled = true;
+      genBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      loading.classList.remove('hidden');
+
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = async () => {
+          try {
+            const res = await fetch(getApiUrl('/api/minutes/generate'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                audio_base64: reader.result,
+                mime_type: blob.type || 'audio/webm',
+                filename: filename,
+                title: title,
+                category: category,
+                company: company,
+                attendees: attendees
+              })
+            });
+            const d = await res.json();
+            if (d.success) {
+              mMinutesId = d.minutes_id;
+              document.getElementById('m-editor').value = d.markdown;
+              document.getElementById('m-result-box').classList.remove('hidden');
+              document.getElementById('m-result-box').scrollIntoView({ behavior: 'smooth' });
+
+              // キューの該当アイテムを削除または同期済みに更新
+              if (queueId) {
+                await dbDeleteRecording(queueId);
+                await refreshPendingQueue();
+              }
+
+              showToast('AI議事録を生成しました！Obsidianにも自動同期完了。', 'success');
+              resolve(d);
+            } else {
+              showToast('生成エラー: ' + (d.error || ''), 'error');
+              reject(new Error(d.error));
+            }
+          } catch (err) {
+            showToast('通信エラー: ' + err.message, 'error');
+            reject(err);
+          } finally {
+            genBtn.disabled = false;
+            genBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            loading.classList.add('hidden');
+          }
+        };
+      });
+    }
+
+    // =========================================================================
+    // 保留キュー（キュー一覧のレンダリング ＆ 一括同期）
+    // =========================================================================
+    function renderQueueItems() {
+      const list = document.getElementById('queue-items-list');
+      const syncBtn = document.getElementById('queue-sync-all-btn');
+
+      if (mPendingQueue.length === 0) {
+        list.innerHTML = `
+          <div class="p-8 text-center text-xs text-slate-500 bg-slate-950/40 rounded-xl border border-slate-800">
+            <span>✨</span> 保留中の未送信録音はありません。すべて同期済みです。
+          </div>
+        `;
+        syncBtn.disabled = true;
+        syncBtn.className = 'w-full py-3 bg-slate-800 text-slate-500 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-not-allowed';
+        return;
+      }
+
+      syncBtn.disabled = !isServerOnline;
+      syncBtn.className = isServerOnline
+        ? 'w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-950/70 transition flex items-center justify-center gap-2 cursor-pointer'
+        : 'w-full py-3 bg-slate-800 text-slate-500 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-not-allowed';
+      syncBtn.innerHTML = isServerOnline
+        ? `<span>⚡</span> 保留中の全録音 (${mPendingQueue.length}件) をまとめてAI議事録生成`
+        : `<span>⏳</span> PCサーバー接続待機中 (接続後に一括生成可能)`;
+
+      list.innerHTML = mPendingQueue.map(item => {
+        const sizeMb = (item.sizeBytes / (1024*1024)).toFixed(2);
+        const timeStr = item.createdAt ? new Date(item.createdAt).toLocaleString('ja-JP').slice(5, 16) : '';
+        return `
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2">
+            <div class="flex items-start justify-between gap-1">
+              <div>
+                <h4 class="text-xs font-bold text-white line-clamp-1">${item.title || '無題の録音'}</h4>
+                <div class="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5">
+                  <span>${timeStr}</span>
+                  <span>・</span>
+                  <span>${sizeMb} MB</span>
+                  ${item.company ? `<span>・ <strong class="text-indigo-300">${item.company}</strong></span>` : ''}
+                </div>
+              </div>
+              <span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-semibold whitespace-nowrap">未生成</span>
+            </div>
+
+            <!-- 音声プレイヤー -->
+            <audio controls src="${URL.createObjectURL(item.audioBlob)}" class="w-full h-7"></audio>
+
+            <div class="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/60">
+              <button type="button" onclick="deleteQueueItem('${item.id}')" class="px-2.5 py-1 text-rose-400 hover:text-rose-300 text-[11px] font-medium transition">
+                削除
+              </button>
+              <button type="button" onclick="syncSingleQueueItem('${item.id}')" ${!isServerOnline ? 'disabled' : ''} class="px-3 py-1 ${isServerOnline ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-slate-800 text-slate-500 cursor-not-allowed'} rounded-lg text-[11px] font-bold transition flex items-center gap-1">
+                <span>✨</span> AI議事録生成
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function deleteQueueItem(id) {
+      if (confirm('この録音データを端末から削除しますか？')) {
+        await dbDeleteRecording(id);
+        await refreshPendingQueue();
+        showToast('録音データを削除しました', 'info');
+      }
+    }
+
+    // 単品同期
+    async function syncSingleQueueItem(id) {
+      await checkServerHealth();
+      if (!isServerOnline) {
+        showToast('PCサーバーがオフラインです。PC起動をお待ちください。', 'error');
+        return;
+      }
+
+      const item = await dbGetRecording(id);
+      if (!item) return;
+
+      switchMobileTab('record');
+      document.getElementById('m-title').value = item.title;
+      document.getElementById('m-category').value = item.category;
+      document.getElementById('m-company').value = item.company;
+      document.getElementById('m-attendees').value = item.attendees;
+
+      await executeGenerateApi(item.audioBlob, item.audioName, item.title, item.category, item.company, item.attendees, item.id);
+    }
+
+    // 全件一括同期
+    async function syncAllQueueItems() {
+      await checkServerHealth();
+      if (!isServerOnline) {
+        showToast('PCサーバーがオフラインです。PCを起動してから実行してください。', 'error');
+        return;
+      }
+
+      if (mPendingQueue.length === 0) return;
+
+      const pBox = document.getElementById('queue-progress-box');
+      const pStatus = document.getElementById('queue-progress-status');
+      const pCount = document.getElementById('queue-progress-count');
+      const pBar = document.getElementById('queue-progress-bar');
+      const syncBtn = document.getElementById('queue-sync-all-btn');
+
+      pBox.classList.remove('hidden');
+      syncBtn.disabled = true;
+
+      const total = mPendingQueue.length;
+      let successCount = 0;
+
+      for (let i = 0; i < total; i++) {
+        const item = mPendingQueue[i];
+        pStatus.textContent = `「${item.title}」をGeminiで解析・議事録作成中...`;
+        pCount.textContent = `${i + 1}/${total}件`;
+        pBar.style.width = `${Math.round(((i + 0.5) / total) * 100)}%`;
+
+        try {
+          await executeGenerateApi(item.audioBlob, item.audioName, item.title, item.category, item.company, item.attendees, item.id);
+          successCount++;
+        } catch (e) {
+          console.error('Queue item sync failed:', item.id, e);
+        }
+        pBar.style.width = `${Math.round(((i + 1) / total) * 100)}%`;
+      }
+
+      pBox.classList.add('hidden');
+      syncBtn.disabled = false;
+      await refreshPendingQueue();
+      showToast(`一括生成完了！ ${successCount}/${total} 件の議事録をObsidianに保存しました。`, 'success');
+    }
+
+    // 編集保存
+    async function saveMobileEdited() {
+      const markdown = document.getElementById('m-editor').value;
+      const title = document.getElementById('m-title').value.trim() || '現場打ち合わせ';
+      const category = document.getElementById('m-category').value;
+      const company = document.getElementById('m-company').value;
+      const attendees = document.getElementById('m-attendees').value.trim();
+
+      try {
+        const res = await fetch(getApiUrl('/api/minutes/save'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: mMinutesId,
+            title: title,
+            category: category,
+            company: company,
+            attendees: attendees,
+            markdown: markdown
+          })
+        });
+        const d = await res.json();
+        if (d.success) {
+          showToast('編集内容を保存しました！', 'success');
+        } else {
+          showToast('保存失敗: ' + (d.error || ''), 'error');
+        }
+      } catch (e) {
+        showToast('保存エラー: ' + e.message, 'error');
+      }
+    }
+
+    function copyMobileResult() {
+      const text = document.getElementById('m-editor').value;
+      navigator.clipboard.writeText(text).then(() => {
+        showToast('全文をクリップボードにコピーしました！', 'success');
+      }).catch(e => showToast('コピー失敗: ' + e.message, 'error'));
+    }
+
+    function downloadMobileDocx() {
+      if (!mMinutesId) return;
+      window.location.href = getApiUrl(`/api/minutes/download_docx?id=${encodeURIComponent(mMinutesId)}`);
+    }
+
+    // アーカイブ履歴
+    async function loadMobileArchive() {
+      try {
+        const res = await fetch(getApiUrl('/api/minutes/list'));
+        const d = await res.json();
+        if (d.success && Array.isArray(d.minutes)) {
+          mArchiveRecords = d.minutes;
+          renderMobileArchive();
+        }
+      } catch (e) {}
+    }
+
+    function renderMobileArchive() {
+      const c = document.getElementById('m-archive-list');
+      const countEl = document.getElementById('m-archive-count');
+      const q = (document.getElementById('m-search').value || '').toLowerCase().trim();
+
+      const filtered = mArchiveRecords.filter(r => {
+        if (!q) return true;
+        return (r.title || '').toLowerCase().includes(q) ||
+               (r.company || '').toLowerCase().includes(q) ||
+               (r.created_at || '').toLowerCase().includes(q);
+      });
+
+      countEl.textContent = `${filtered.length}件`;
+      if (filtered.length === 0) {
+        c.innerHTML = '<div class="p-6 text-center text-xs text-slate-500">議事録が見つかりません</div>';
+        return;
+      }
+
+      c.innerHTML = filtered.map(r => `
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+          <div class="flex items-start justify-between gap-1">
+            <h4 class="text-xs font-bold text-white line-clamp-1">${r.title || '無題'}</h4>
+            <span class="text-[10px] text-slate-500 whitespace-nowrap">${(r.created_at || '').slice(5, 16)}</span>
+          </div>
+          <div class="flex items-center gap-1.5 flex-wrap text-[10px]">
+            <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">${r.category || '一般'}</span>
+            ${r.company ? `<span class="px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-300 font-semibold">${r.company}</span>` : ''}
+          </div>
+          <div class="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-800/80">
+            <button type="button" onclick="loadToEditor('${r.id}')" class="px-2 py-0.5 bg-indigo-950 text-indigo-300 rounded text-[11px] font-semibold border border-indigo-700/60">
+              開く
+            </button>
+            <button type="button" onclick="window.location.href=getApiUrl('/api/minutes/download_docx?id=${encodeURIComponent(r.id)}')" class="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[11px]">
+              Word
+            </button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function loadToEditor(id) {
+      try {
+        const res = await fetch(getApiUrl(`/api/minutes/detail?id=${encodeURIComponent(id)}`));
+        const d = await res.json();
+        if (d.success && d.record) {
+          const rec = d.record;
+          mMinutesId = rec.id;
+          document.getElementById('m-title').value = rec.title || '';
+          document.getElementById('m-category').value = rec.category || '内部定例ミーティング';
+          document.getElementById('m-company').value = rec.company || '';
+          document.getElementById('m-attendees').value = rec.attendees || '';
+          document.getElementById('m-editor').value = rec.markdown || '';
+          document.getElementById('m-result-box').classList.remove('hidden');
+          switchMobileTab('record');
+          document.getElementById('m-result-box').scrollIntoView({ behavior: 'smooth' });
+          showToast(`「${rec.title}」をエディタに読み込みました`, 'info');
+        } else {
+          showToast('読込失敗: ' + (d.error || ''), 'error');
+        }
+      } catch (e) {
+        showToast('読込エラー: ' + e.message, 'error');
+      }
+    }
+
+    
+  
+    // アプリ内マニュアルの開閉（ネイティブ・iframeなし）
+    function openManualModal() {
+      const modal = document.getElementById('manual-modal');
+      if (modal) {
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden'; // 背景スクロール停止
+      }
+    }
+
+    function closeManualModal() {
+      const modal = document.getElementById('manual-modal');
+      if (modal) {
+        modal.classList.add('hidden');
+        document.body.style.overflow = ''; // スクロール復元
+      }
+    }
+
+    // マニュアル内のOS切り替えフィルター
+    function setOsFilter(os) {
+      const btnAll = document.getElementById('btn-tab-all');
+      const btnIos = document.getElementById('btn-tab-ios');
+      const btnAndroid = document.getElementById('btn-tab-android');
+      
+      const iosCards = document.querySelectorAll('.ios-target');
+      const androidCards = document.querySelectorAll('.android-target');
+
+      if (btnAll && btnIos && btnAndroid) {
+        [btnAll, btnIos, btnAndroid].forEach(btn => {
+          btn.className = "flex-1 py-2 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 text-slate-400 hover:text-white";
+        });
+
+        if (os === 'ios') {
+          btnIos.className = "flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 bg-indigo-600 text-white shadow";
+          iosCards.forEach(c => c.style.display = 'block');
+          androidCards.forEach(c => c.style.display = 'none');
+        } else if (os === 'android') {
+          btnAndroid.className = "flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 bg-emerald-600 text-white shadow";
+          iosCards.forEach(c => c.style.display = 'none');
+          androidCards.forEach(c => c.style.display = 'block');
+        } else {
+          btnAll.className = "flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 bg-indigo-600 text-white shadow";
+          iosCards.forEach(c => c.style.display = 'block');
+          androidCards.forEach(c => c.style.display = 'block');
+        }
+      }
+    }
+
+  </script>
+
+  
+  <!-- アプリ内マニュアル（完全ネイティブ・iframe不使用で多重化ゼロ） -->
+  <div id="manual-modal" class="fixed inset-0 z-50 bg-slate-950 flex flex-col hidden overflow-hidden">
+    <!-- 固定モーダルヘッダー -->
+    <div class="bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex items-center justify-between safe-top shrink-0 shadow-lg">
+      <div class="flex items-center gap-2">
+        <span class="text-base">📖</span>
+        <span class="text-xs font-bold text-white">利用マニュアル（使い方ガイド）</span>
+      </div>
+      <button type="button" onclick="closeManualModal()" class="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 transition shadow-md shadow-indigo-950 cursor-pointer">
+        <span>✕</span>
+        <span>閉じる</span>
+      </button>
+    </div>
+
+    <!-- スクロール可能マニュアルコンテンツ本体 -->
+    <div class="flex-1 overflow-y-auto px-4 py-5 space-y-6 safe-bottom">
+      
+
+    <!-- イントロダクション バナー -->
+    <div class="bg-gradient-to-br from-indigo-950/80 via-slate-900 to-slate-900 border border-indigo-800/50 rounded-3xl p-5 sm:p-6 shadow-xl relative overflow-hidden">
+      <div class="absolute -right-8 -bottom-8 w-40 h-40 bg-indigo-600/10 rounded-full blur-2xl pointer-events-none"></div>
+      
+      <div class="flex items-start gap-3.5 mb-3">
+        <div class="w-10 h-10 rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center text-xl shrink-0">
+          ✨
+        </div>
+        <div>
+          <h2 class="text-base sm:text-lg font-bold text-white tracking-wide">
+            スマホで話すだけ！AIが議事録を自動作成
+          </h2>
+          <p class="text-xs text-indigo-200/80 mt-1 leading-relaxed">
+            訪問先での定期監査・労務面談・社内会議の音声をスマホで録音するだけで、Googleの最新AI（Gemini 2.5）が<strong>「決定事項」「ToDo」「話者別の文字起こし」</strong>を瞬時に整理してWord文書やデータベースへ自動保管します。
+          </p>
+        </div>
+      </div>
+
+      <!-- 3大安心ポイント -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-4 pt-4 border-t border-indigo-900/40">
+        <div class="flex items-center gap-2 bg-slate-900/80 rounded-xl p-2.5 border border-indigo-950">
+          <span class="text-emerald-400 text-base">🟢</span>
+          <span class="text-xs text-slate-200 font-medium"><strong>PC停止中も録音OK</strong>（オフライン自動保存）</span>
+        </div>
+        <div class="flex items-center gap-2 bg-slate-900/80 rounded-xl p-2.5 border border-indigo-950">
+          <span class="text-indigo-400 text-base">🏢</span>
+          <span class="text-xs text-slate-200 font-medium"><strong>企業名42社</strong>をワンタップ選択</span>
+        </div>
+        <div class="flex items-center gap-2 bg-slate-900/80 rounded-xl p-2.5 border border-indigo-950">
+          <span class="text-amber-400 text-base">⚡</span>
+          <span class="text-xs text-slate-200 font-medium">帰社後に<strong>まとめて一括生成</strong>可能</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- OS切り替えタブ（iOS / Android） -->
+    <div class="no-print bg-slate-900 border border-slate-800 p-1.5 rounded-2xl flex items-center gap-1 shadow-lg">
+      <button id="btn-tab-all" onclick="setOsFilter('all')" class="flex-1 py-2 text-xs font-bold rounded-xl transition flex items-center justify-center gap-1.5 bg-indigo-600 text-white shadow">
+        <i class="fa-solid fa-list-check text-[11px]"></i>
+        <span>両方・全手順を見る</span>
+      </button>
+      <button id="btn-tab-ios" onclick="setOsFilter('ios')" class="flex-1 py-2 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 text-slate-400 hover:text-white">
+        <i class="fa-brands fa-apple text-sm"></i>
+        <span>iPhone (iOS) 向け</span>
+      </button>
+      <button id="btn-tab-android" onclick="setOsFilter('android')" class="flex-1 py-2 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 text-slate-400 hover:text-white">
+        <i class="fa-brands fa-android text-sm"></i>
+        <span>Android 向け</span>
+      </button>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- STEP 1: ホーム画面に追加（PWAインストール） -->
+    <!-- ================================================================= -->
+    <section class="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="w-7 h-7 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shadow-md">1</span>
+          <h3 class="text-base font-bold text-white">最初だけ！スマホのホーム画面に登録する</h3>
+        </div>
+        <span class="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-amber-300 border border-amber-500/30 font-semibold">所要時間: 30秒</span>
+      </div>
+
+      <p class="text-xs text-slate-300 leading-relaxed">
+        ホーム画面にアイコンを追加しておくと、次回から<strong>本物のスマホアプリのようにワンタップで起動</strong>でき、PCが消えているオフライン時でも素早く録音できます。
+      </p>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+        
+        <!-- iOS (iPhone Safari) 手順 -->
+        <div id="card-ios-step1" class="os-card ios-target bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-4">
+          <div class="flex items-center justify-between">
+            <h4 class="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+              <i class="fa-brands fa-apple text-base text-white"></i>
+              <span>iPhone（Safari）の場合</span>
+            </h4>
+            <span class="text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">Safari推奨</span>
+          </div>
+
+          <!-- iPhone画面モック図解 -->
+          <div class="phone-mock max-w-[260px] mx-auto p-3 text-[11px] text-slate-300 space-y-3">
+            <div class="h-4"></div>
+            <!-- アプリ画面ヘッダー擬似 -->
+            <div class="bg-slate-900 rounded-lg p-2 border border-slate-800 flex items-center justify-between">
+              <span class="font-bold text-[10px] text-white">🎙️ 議事録AI</span>
+              <span class="text-[8px] bg-emerald-950 text-emerald-400 px-1 rounded">オンライン</span>
+            </div>
+            
+            <div class="h-20 flex flex-col items-center justify-center border border-dashed border-slate-800 rounded-xl bg-slate-900/50">
+              <span class="text-xl">🎙️</span>
+              <span class="text-[9px] text-slate-400 mt-1">コラボジャパン 議事録AI</span>
+            </div>
+
+            <!-- Safari下部ツールバー擬似 -->
+            <div class="bg-slate-900 border-t border-slate-800 rounded-xl p-2 flex items-center justify-around relative">
+              <i class="fa-solid fa-chevron-left text-slate-500 text-[10px]"></i>
+              <i class="fa-solid fa-chevron-right text-slate-500 text-[10px]"></i>
+              
+              <!-- 共有ボタン強調 -->
+              <div class="relative">
+                <div class="w-8 h-8 rounded-lg bg-indigo-600/30 border-2 border-indigo-500 flex items-center justify-center text-indigo-300 text-xs shadow-lg animate-pulse">
+                  <i class="fa-solid fa-arrow-up-from-bracket"></i>
+                </div>
+                <!-- 指マーク -->
+                <div class="absolute -top-3 -right-2 text-base tap-indicator">👆</div>
+              </div>
+
+              <i class="fa-regular fa-bookmark text-slate-500 text-[10px]"></i>
+              <i class="fa-regular fa-clone text-slate-500 text-[10px]"></i>
+            </div>
+            
+            <!-- 共有メニューポップアップ擬似 -->
+            <div class="bg-slate-900/95 border border-indigo-500/50 rounded-xl p-2 space-y-1 shadow-2xl">
+              <div class="text-[9px] text-slate-400 border-b border-slate-800 pb-1">Safari メニュー</div>
+              <div class="p-1 rounded bg-indigo-950 border border-indigo-500/40 text-[9px] font-bold text-white flex items-center justify-between">
+                <span>➕ ホーム画面に追加</span>
+                <span class="text-indigo-400 font-bold">ココをタップ！</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 手順リスト -->
+          <ol class="space-y-2 text-xs text-slate-300 pl-1">
+            <li class="flex items-start gap-2">
+              <span class="w-4 h-4 rounded-full bg-slate-800 text-indigo-300 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+              <span>Safariで共有URLを開きます。</span>
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="w-4 h-4 rounded-full bg-slate-800 text-indigo-300 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+              <span>画面下の<strong>「共有ボタン」<i class="fa-solid fa-arrow-up-from-bracket mx-1 text-indigo-400"></i></strong>をタップします。</span>
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="w-4 h-4 rounded-full bg-slate-800 text-indigo-300 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+              <span>メニューから<strong>「ホーム画面に追加」</strong>を選び、右上の<strong>「追加」</strong>を押します。</span>
+            </li>
+          </ol>
+        </div>
+
+        <!-- Android (Chrome) 手順 -->
+        <div id="card-android-step1" class="os-card android-target bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-4">
+          <div class="flex items-center justify-between">
+            <h4 class="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+              <i class="fa-brands fa-android text-base text-white"></i>
+              <span>Android（Chrome）の場合</span>
+            </h4>
+            <span class="text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">Chrome推奨</span>
+          </div>
+
+          <!-- Android画面モック図解 -->
+          <div class="phone-mock max-w-[260px] mx-auto p-3 text-[11px] text-slate-300 space-y-3">
+            <div class="h-4"></div>
+            <!-- Chrome上部ツールバー擬似 -->
+            <div class="bg-slate-900 border-b border-slate-800 rounded-xl p-2 flex items-center justify-between relative">
+              <div class="flex items-center gap-1.5 text-[9px] text-slate-400 bg-slate-950 px-2 py-1 rounded-md border border-slate-800 flex-1 mr-2 truncate">
+                <i class="fa-solid fa-lock text-[8px] text-emerald-400"></i>
+                <span>collabo-minutes...</span>
+              </div>
+              
+              <!-- 3点リーダー強調 -->
+              <div class="relative">
+                <div class="w-7 h-7 rounded-lg bg-emerald-600/30 border-2 border-emerald-500 flex items-center justify-center text-emerald-300 text-xs shadow-lg animate-pulse">
+                  <i class="fa-solid fa-ellipsis-vertical"></i>
+                </div>
+                <!-- 指マーク -->
+                <div class="absolute -bottom-3 -right-2 text-base tap-indicator">👆</div>
+              </div>
+            </div>
+
+            <!-- アプリ画面ヘッダー擬似 -->
+            <div class="bg-slate-900 rounded-lg p-2 border border-slate-800 flex items-center justify-between">
+              <span class="font-bold text-[10px] text-white">🎙️ 議事録AI</span>
+              <span class="text-[8px] bg-emerald-950 text-emerald-400 px-1 rounded">オンライン</span>
+            </div>
+
+            <!-- Chromeドロップダウンメニュー擬似 -->
+            <div class="bg-slate-900/95 border border-emerald-500/50 rounded-xl p-2 space-y-1 shadow-2xl ml-auto w-44">
+              <div class="p-1 rounded bg-emerald-950 border border-emerald-500/40 text-[9px] font-bold text-white flex items-center justify-between">
+                <span>📲 アプリをインストール</span>
+              </div>
+              <div class="text-[8px] text-slate-400 pl-1">または「ホーム画面に追加」</div>
+            </div>
+            
+            <div class="h-10"></div>
+          </div>
+
+          <!-- 手順リスト -->
+          <ol class="space-y-2 text-xs text-slate-300 pl-1">
+            <li class="flex items-start gap-2">
+              <span class="w-4 h-4 rounded-full bg-slate-800 text-emerald-300 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+              <span>Chromeで共有URLを開きます。</span>
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="w-4 h-4 rounded-full bg-slate-800 text-emerald-300 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+              <span>画面右上の<strong>メニュー（縦の3点 <i class="fa-solid fa-ellipsis-vertical mx-0.5 text-emerald-400"></i>）</strong>をタップします。</span>
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="w-4 h-4 rounded-full bg-slate-800 text-emerald-300 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+              <span><strong>「アプリをインストール」</strong>（または「ホーム画面に追加」）をタップして確定します。</span>
+            </li>
+          </ol>
+        </div>
+
+      </div>
+
+      <div class="bg-indigo-950/40 border border-indigo-900/60 rounded-xl p-3 flex items-start gap-2.5 text-xs text-indigo-200">
+        <i class="fa-solid fa-circle-check text-indigo-400 mt-0.5 text-sm"></i>
+        <span>
+          これでホーム画面に<strong>「コラボジャパン 議事録AI」</strong>のアイコンが作成されました！次回からはこのアイコンをタップするだけで即使えます。
+        </span>
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- STEP 2: 基本の録音方法（事務所のPCが動いている時） -->
+    <!-- ================================================================= -->
+    <section class="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="w-7 h-7 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shadow-md">2</span>
+          <h3 class="text-base font-bold text-white">基本の録音手順（PC起動時：通常モード）</h3>
+        </div>
+        <span class="text-[11px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/30 font-semibold">🟢 オンライン</span>
+      </div>
+
+      <p class="text-xs text-slate-300 leading-relaxed">
+        事務所のPCが起動しているときは、録音停止後に<strong>その場ですぐAIが解析して議事録が完成</strong>します。
+      </p>
+
+      <!-- 画面UIモック図解 (ステップ解説) -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+        
+        <!-- Step 2-1: 会社名とタイトル選択 -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 space-y-3">
+          <div class="text-[11px] font-bold text-indigo-300 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+            <span class="w-4 h-4 rounded-full bg-indigo-900 text-indigo-200 text-[10px] flex items-center justify-center">①</span>
+            <span>企業名・会議情報を選ぶ</span>
+          </div>
+          
+          <div class="phone-mock p-3 text-[10px] space-y-2">
+            <div class="h-2"></div>
+            <div class="text-[9px] text-slate-400">対象企業（42社マスター連携）</div>
+            <div class="bg-slate-900 border-2 border-indigo-500 rounded-lg p-2 text-white font-bold flex items-center justify-between">
+              <span>株式会社ABC</span>
+              <i class="fa-solid fa-chevron-down text-indigo-400"></i>
+            </div>
+            <div class="text-[9px] text-slate-400 pt-1">会議種別</div>
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-1.5 text-slate-300 flex items-center justify-between">
+              <span>定期巡回・監査</span>
+              <i class="fa-solid fa-chevron-down text-slate-500"></i>
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-400">※企業名を選ぶだけで、正しい代表者名や所在地が議事録に自動反映されます（未選択でも録音可能です）。</p>
+        </div>
+
+        <!-- Step 2-2: 録音ボタンを押す -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 space-y-3">
+          <div class="text-[11px] font-bold text-rose-300 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+            <span class="w-4 h-4 rounded-full bg-rose-950 text-rose-300 text-[10px] flex items-center justify-center">②</span>
+            <span>「録音開始」をタップ</span>
+          </div>
+          
+          <div class="phone-mock p-3 text-[10px] space-y-2">
+            <div class="h-2"></div>
+            <!-- 初回マイク許可ダイアログ擬似 -->
+            <div class="bg-slate-900/90 border border-amber-500/50 rounded-xl p-2 text-center space-y-1 shadow-lg">
+              <div class="text-[9px] text-slate-300">マイクへのアクセスを求めています</div>
+              <div class="flex gap-1 justify-center pt-1">
+                <span class="px-2 py-0.5 rounded bg-indigo-600 text-[8px] font-bold text-white">許可をタップ</span>
+              </div>
+            </div>
+            
+            <!-- 録音ボタン -->
+            <div class="p-3 text-center">
+              <div class="w-14 h-14 mx-auto rounded-full bg-rose-600 text-white flex items-center justify-center text-xl shadow-lg shadow-rose-950 animate-pulse border-2 border-rose-400">
+                <i class="fa-solid fa-microphone"></i>
+              </div>
+              <div class="text-[10px] font-bold text-rose-400 mt-2">録音中 00:15:32</div>
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-400">※初回だけ「マイクの利用許可」が出ますので、必ず<strong>「許可」</strong>を押してください。</p>
+        </div>
+
+        <!-- Step 2-3: 停止＆AI生成 -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-3.5 space-y-3">
+          <div class="text-[11px] font-bold text-emerald-300 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+            <span class="w-4 h-4 rounded-full bg-emerald-950 text-emerald-300 text-[10px] flex items-center justify-center">③</span>
+            <span>「AI議事録生成」をタップ</span>
+          </div>
+          
+          <div class="phone-mock p-3 text-[10px] space-y-2">
+            <div class="h-2"></div>
+            <div class="bg-slate-900 rounded-lg p-2 border border-slate-800 text-center">
+              <span class="text-emerald-400 font-bold text-[9px]">✔ 録音完了 (23分14秒)</span>
+            </div>
+
+            <!-- 生成ボタン -->
+            <div class="bg-gradient-to-r from-indigo-600 to-violet-600 rounded-xl p-2.5 text-center text-white font-bold shadow-md shadow-indigo-950 flex items-center justify-center gap-1 text-[10px]">
+              <i class="fa-solid fa-wand-magic-sparkles"></i>
+              <span>AI議事録を生成</span>
+            </div>
+
+            <div class="text-[8px] text-center text-slate-400 pt-1">
+              約30秒でGeminiが自動作成！
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-400">※生成された議事録は画面上でそのまま確認・編集でき、Word形式（.docx）でダウンロードも可能です。</p>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- STEP 3: 事務所PCが消えている時の使い方（オフラインモード） -->
+    <!-- ================================================================= -->
+    <section class="bg-slate-900 border border-amber-800/40 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="w-7 h-7 rounded-full bg-amber-500 text-slate-950 text-xs font-black flex items-center justify-center shadow-md">3</span>
+          <h3 class="text-base font-bold text-white">事務所PCが消えている時（オフライン自動保存）</h3>
+        </div>
+        <span class="text-[11px] px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-500/40 font-semibold">🟠 オフライン保存</span>
+      </div>
+
+      <div class="bg-amber-950/30 border border-amber-800/40 rounded-2xl p-4 flex items-start gap-3">
+        <div class="text-2xl text-amber-400 shrink-0">💡</div>
+        <div class="text-xs text-amber-100/90 leading-relaxed">
+          <strong>「事務所のPCがシャットダウンしている」「電波が悪い現場」でも全く心配ありません！</strong><br>
+          アプリはスマホ内部の安全な専用保管庫（IndexedDB）を搭載しているため、サーバーと通信できなくても<strong>スマホ単体で何本でも録音が保存</strong>されます。
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5 pt-1">
+        
+        <!-- オフライン表示のモック -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <h4 class="text-xs font-bold text-slate-200">画面上部に「🟠 オフライン」と表示</h4>
+          <div class="phone-mock max-w-[250px] mx-auto p-3 text-[10px] space-y-3">
+            <div class="h-3"></div>
+            <!-- オフラインバッジ強調 -->
+            <div class="bg-slate-900 rounded-lg p-2 border border-slate-800 flex items-center justify-between">
+              <span class="font-bold text-[9px] text-white">🎙️ 議事録AI</span>
+              <span class="text-[8px] bg-amber-950/90 text-amber-300 border border-amber-600/50 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                <span>オフライン (スマホ内保存)</span>
+              </span>
+            </div>
+            
+            <div class="p-3 text-center space-y-2">
+              <div class="w-12 h-12 mx-auto rounded-full bg-slate-800 border-2 border-slate-700 flex items-center justify-center text-slate-400 text-lg">
+                <i class="fa-solid fa-microphone"></i>
+              </div>
+              <div class="text-[9px] text-slate-300">通常通り「録音開始」できます</div>
+            </div>
+
+            <div class="bg-amber-950/40 border border-amber-700/30 rounded-lg p-1.5 text-[8px] text-amber-200 text-center">
+              💾 スマホ内部に自動保存されます
+            </div>
+          </div>
+        </div>
+
+        <!-- オフライン時の録音完了の流れ -->
+        <div class="space-y-3 text-xs text-slate-300">
+          <h4 class="text-xs font-bold text-white flex items-center gap-1.5">
+            <i class="fa-solid fa-shield-halved text-indigo-400"></i>
+            <span>オフライン時の録音の流れ</span>
+          </h4>
+          <ol class="space-y-3 pl-1">
+            <li class="flex items-start gap-2.5">
+              <span class="w-5 h-5 rounded-full bg-slate-800 text-amber-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+              <span><strong>いつも通り「録音開始」➔「録音停止」</strong>を行います。</span>
+            </li>
+            <li class="flex items-start gap-2.5">
+              <span class="w-5 h-5 rounded-full bg-slate-800 text-amber-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+              <span>停止すると、録音音声がスマホの<strong>「保留キュー」に自動で安全保存</strong>されます（アプリを閉じても消えません）。</span>
+            </li>
+            <li class="flex items-start gap-2.5">
+              <span class="w-5 h-5 rounded-full bg-slate-800 text-amber-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+              <span>午前・午後で複数件の面談があっても、<strong>2件目・3件目と続けて録音可能</strong>です。</span>
+            </li>
+          </ol>
+          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-400">
+            ※企業名リスト（42社）も自動キャッシュされているため、電波がない場所でも企業名を選択できます。
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- STEP 4: 事務所PCがついた後の「まとめて一括生成」 -->
+    <!-- ================================================================= -->
+    <section class="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="w-7 h-7 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shadow-md">4</span>
+          <h3 class="text-base font-bold text-white">帰社後・PC起動時の「まとめてAI議事録生成」</h3>
+        </div>
+        <span class="text-[11px] px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-500/30 font-semibold">ワンタップ一括同期</span>
+      </div>
+
+      <p class="text-xs text-slate-300 leading-relaxed">
+        事務所のPCが起動している時間帯になると、画面上の表示が自動で<strong>「🟢 PC接続中 (オンライン)」</strong>に変わります。あとは保留キューからボタンを1回押すだけで、溜まった録音がすべてAI議事録になります。
+      </p>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2 items-center">
+        
+        <!-- 保留キュー画面モック図解 -->
+        <div class="phone-mock max-w-[270px] mx-auto p-3 text-[11px] text-slate-300 space-y-3">
+          <div class="h-3"></div>
+          <!-- ヘッダー -->
+          <div class="bg-slate-900 rounded-lg p-2 border border-slate-800 flex items-center justify-between">
+            <span class="font-bold text-[9px] text-white">⚡ 保留キュー (2件)</span>
+            <span class="text-[8px] bg-emerald-950 text-emerald-400 px-1.5 py-0.5 rounded-full font-bold">🟢 PC接続中</span>
+          </div>
+
+          <!-- 一括生成ボタン強調 -->
+          <div class="relative">
+            <div class="bg-gradient-to-r from-amber-500 to-indigo-600 rounded-xl p-2.5 text-center text-white font-black shadow-lg shadow-indigo-950 flex items-center justify-center gap-1.5 text-[10px] animate-pulse">
+              <i class="fa-solid fa-bolt"></i>
+              <span>全てまとめてAI議事録生成</span>
+            </div>
+            <!-- 指マーク -->
+            <div class="absolute -top-3 -right-2 text-base tap-indicator">👆</div>
+          </div>
+
+          <!-- 保留録音アイテム一覧擬似 -->
+          <div class="space-y-1.5">
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-2 space-y-1">
+              <div class="flex items-center justify-between text-[9px]">
+                <span class="font-bold text-white">ABC工業 定期監査</span>
+                <span class="text-[8px] text-slate-400">18分20秒</span>
+              </div>
+              <div class="text-[8px] text-indigo-300">株式会社ABC • 未生成</div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-lg p-2 space-y-1">
+              <div class="flex items-center justify-between text-[9px]">
+                <span class="font-bold text-white">実習生 3号移行面談</span>
+                <span class="text-[8px] text-slate-400">24分05秒</span>
+              </div>
+              <div class="text-[8px] text-indigo-300">XYZ株式会社 • 未生成</div>
+            </div>
+          </div>
+
+          <!-- 下部タブバー擬似 (保留キュータブ強調) -->
+          <div class="bg-slate-900 border-t border-slate-800 rounded-xl p-1.5 flex items-center justify-around text-[9px]">
+            <span class="text-slate-500">🎙️ 録音</span>
+            <span class="text-indigo-400 font-bold border-b-2 border-indigo-500 pb-0.5">⚡ 保留キュー (2)</span>
+            <span class="text-slate-500">📚 履歴</span>
+          </div>
+        </div>
+
+        <!-- 手順解説 -->
+        <div class="space-y-3 text-xs text-slate-300">
+          <ol class="space-y-3 pl-1">
+            <li class="flex items-start gap-2.5">
+              <span class="w-5 h-5 rounded-full bg-slate-800 text-indigo-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
+              <div>
+                <strong class="text-white">画面下の「⚡ 保留キュー」タブをタップ</strong>
+                <p class="text-[11px] text-slate-400 mt-0.5">オフライン中に録音した未生成データが一覧表示されます。</p>
+              </div>
+            </li>
+            <li class="flex items-start gap-2.5">
+              <span class="w-5 h-5 rounded-full bg-slate-800 text-indigo-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
+              <div>
+                <strong class="text-white">「⚡ 全てまとめてAI議事録生成」をタップ</strong>
+                <p class="text-[11px] text-slate-400 mt-0.5">溜まった録音データがPCへ順番に自動転送され、AI解析が始まります。</p>
+              </div>
+            </li>
+            <li class="flex items-start gap-2.5">
+              <span class="w-5 h-5 rounded-full bg-slate-800 text-indigo-300 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
+              <div>
+                <strong class="text-white">プログレスバーが完了すれば完了！</strong>
+                <p class="text-[11px] text-slate-400 mt-0.5">各会議の議事録、Word文書（.docx）、Obsidianナレッジ保存まで全自動で完了します。</p>
+              </div>
+            </li>
+          </ol>
+
+          <div class="bg-emerald-950/40 border border-emerald-700/40 rounded-xl p-3 text-[11px] text-emerald-200 flex items-start gap-2">
+            <i class="fa-solid fa-check text-emerald-400 mt-0.5"></i>
+            <span>個別に1件ずつ再生して内容を確認してから生成することも可能です。</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- STEP 5: 過去履歴の確認＆閲覧 -->
+    <!-- ================================================================= -->
+    <section class="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="w-7 h-7 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shadow-md">5</span>
+          <h3 class="text-base font-bold text-white">作成した議事録の確認・閲覧</h3>
+        </div>
+        <span class="text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-semibold">📚 過去履歴</span>
+      </div>
+
+      <p class="text-xs text-slate-300 leading-relaxed">
+        画面下の<strong>「📚 過去履歴」</strong>タブをタップすると、これまでに生成された議事録をいつでも確認できます。
+      </p>
+
+      <div class="bg-slate-950 rounded-2xl p-4 border border-slate-800 space-y-3">
+        <div class="flex items-center justify-between text-xs text-slate-300">
+          <span class="font-bold text-white flex items-center gap-1.5">
+            <i class="fa-solid fa-magnifying-glass text-indigo-400"></i>
+            <span>企業名や会議名でかんたん検索</span>
+          </span>
+          <span class="text-[10px] text-slate-500">最新順に表示</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+          <div class="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+            <div class="text-indigo-300 font-bold text-[11px]">全文プレビュー</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">決定事項・ToDo・文字起こしをスマホで閲覧</div>
+          </div>
+          <div class="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+            <div class="text-indigo-300 font-bold text-[11px]">内容の追記・修正</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">スマホから直接修正して再保存が可能</div>
+          </div>
+          <div class="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+            <div class="text-indigo-300 font-bold text-[11px]">Word出力</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">提出用の清書Wordファイルをダウンロード</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- よくある質問 ＆ トラブルシューティング -->
+    <!-- ================================================================= -->
+    <section class="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl space-y-5">
+      <div class="flex items-center gap-2.5 border-b border-slate-800 pb-3">
+        <span class="w-7 h-7 rounded-full bg-violet-600 text-white text-xs font-black flex items-center justify-center shadow-md">?</span>
+        <h3 class="text-base font-bold text-white">よくある質問 ＆ トラブルシューティング</h3>
+      </div>
+
+      <div class="space-y-4">
+        
+        <!-- Q1: マイクの許可を拒否してしまった -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+          <div class="flex items-start gap-2 text-xs font-bold text-rose-300">
+            <span class="bg-rose-950 text-rose-300 px-1.5 py-0.5 rounded text-[10px]">Q1</span>
+            <span>「マイクへのアクセスが拒否されました」と出て録音できない</span>
+          </div>
+          <div class="text-xs text-slate-300 pl-6 space-y-1.5 leading-relaxed">
+            <p>誤ってマイク許可を「拒否」してしまった場合は、以下の手順で再度「許可」してください。</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-[11px]">
+              <div class="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                <span class="font-bold text-indigo-300 block mb-1"><i class="fa-brands fa-apple mr-1"></i> iPhoneの場合:</span>
+                「設定」アプリ ➔「Safari」➔ 下部の「マイク」➔<strong>「確認」または「許可」</strong>に設定。
+              </div>
+              <div class="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                <span class="font-bold text-emerald-300 block mb-1"><i class="fa-brands fa-android mr-1"></i> Androidの場合:</span>
+                ChromeのURLバー左側の<strong>鍵マーク <i class="fa-solid fa-lock text-[9px]"></i></strong>をタップ ➔「権限」➔「マイク」を<strong>「許可」</strong>に変更。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Q2: 録音中に電話がかかってきたらどうなる？ -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+          <div class="flex items-start gap-2 text-xs font-bold text-indigo-300">
+            <span class="bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded text-[10px]">Q2</span>
+            <span>録音中にスマホへ電話やLINE着信があったらデータは消えますか？</span>
+          </div>
+          <div class="text-xs text-slate-300 pl-6 leading-relaxed">
+            消えません。通話が入るとOSにより録音が一時停止されますが、それまでに録音された音声データはそのまま保持されます。通話終了後に「録音停止」を押せば保留キューへ安全に保存されます。
+          </div>
+        </div>
+
+        <!-- Q3: 画面を暗く（スリープ）しても録音は続く？ -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+          <div class="flex items-start gap-2 text-xs font-bold text-indigo-300">
+            <span class="bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded text-[10px]">Q3</span>
+            <span>録音中にスマホの画面を消しても大丈夫ですか？</span>
+          </div>
+          <div class="text-xs text-slate-300 pl-6 leading-relaxed">
+            長時間の会議では、スマホのバッテリー消費を抑えつつバックグラウンド停止を防ぐため、<strong>画面の自動ロック時間を長めに設定するか、画面を伏せて置いておくこと</strong>を推奨いたします。
+          </div>
+        </div>
+
+        <!-- Q4: 接続に関する質問 -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+          <div class="flex items-start gap-2 text-xs font-bold text-indigo-300">
+            <span class="bg-indigo-950 text-indigo-300 px-1.5 py-0.5 rounded text-[10px]">Q4</span>
+            <span>「サーバーに接続できません」または「オフライン」と出ているときは？</span>
+          </div>
+          <div class="text-xs text-slate-300 pl-6 leading-relaxed">
+            本アプリは完全オフライン対応です。ホーム画面に追加しておけば、PCがシャットダウンしている間や電波がない現場でも、スマホ単体で録音・安全保存が可能です。PCが起動してオンラインになると、自動で「🟢 PC接続中」に切り替わり、「まとめてAI議事録生成」ができるようになります。
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- フッター -->
+    <footer class="text-center text-xs text-slate-500 pt-4 pb-8 space-y-2">
+      <div class="flex items-center justify-center gap-2">
+        <span>協同組合コラボジャパン</span>
+        <span>•</span>
+        <span>業務効率化DX推進チーム</span>
+      </div>
+      <p class="text-[10px] text-slate-600">※本マニュアルの内容および画面はシステムの改善に伴い予告なく更新される場合があります。</p>
+    </footer>
+
+  
+      
+      <!-- 下部にも大きな閉じるボタンを配置 -->
+      <div class="pt-4 pb-12 text-center">
+        <button type="button" onclick="closeManualModal()" class="w-full max-w-xs mx-auto py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold rounded-2xl shadow-lg transition flex items-center justify-center gap-2">
+          <span>✕</span>
+          <span>マニュアルを閉じて録音画面へ戻る</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
