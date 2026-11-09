@@ -118,7 +118,12 @@
           <h2 class="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
             <span>📝</span> 会議・面談の情報
           </h2>
-          <span class="text-[10px] text-slate-500">※未入力でも即時録音可能</span>
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="clearMobileMetaForm()" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-md text-[10px] font-medium transition flex items-center gap-1 border border-slate-700" title="入力内容をクリア">
+              <span>🔄</span> クリア
+            </button>
+            <span class="text-[10px] text-slate-500">※未入力でも即時録音可能</span>
+          </div>
         </div>
 
         <div class="space-y-2.5">
@@ -690,6 +695,14 @@
 
       if (tab === 'queue') refreshPendingQueue();
       if (tab === 'archive') loadMobileArchive();
+    }
+
+    function clearMobileMetaForm() {
+      document.getElementById('m-title').value = '';
+      document.getElementById('m-category').value = '内部定例ミーティング';
+      document.getElementById('m-company').value = '';
+      document.getElementById('m-attendees').value = '';
+      showToast('会議情報をクリアしました', 'info');
     }
 
     // 企業マスター読み込み
