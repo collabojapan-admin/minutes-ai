@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v9 - Permanent Cloud Hosting + Dynamic PC Tunnel Discovery)
-const CACHE_NAME = 'collabo-minutes-pwa-v9';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v10 - Ultra-fast health check & resilient connection)
+const CACHE_NAME = 'collabo-minutes-pwa-v10';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
