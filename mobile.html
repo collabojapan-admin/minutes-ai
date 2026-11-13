@@ -168,8 +168,10 @@
             <span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
             録音中（音声を収音しています）
           </div>
+          <div id="m-wakelock-badge" class="hidden items-center justify-center gap-1 mt-1.5 text-[11px] font-medium text-amber-300 bg-amber-950/60 border border-amber-700/50 rounded-full px-3 py-0.5">
+            <span>🔆</span> 画面スリープ防止中（机の上に置いたまま録音継続可能）
+          </div>
           <p id="m-offline-hint" class="text-[11px] text-slate-400 mt-1">※PCがシャットダウンしていてもスマホ単体で安全に録音できます</p>
-          <p class="text-[10px] text-emerald-400/80 mt-0.5">🛡️ 録音中は自動スリープを防止し、画面消灯時も録音を継続します</p>
         </div>
 
         <!-- 巨大録音ボタン -->
@@ -411,9 +413,6 @@
     let mAudioChunks = [];
     let mTimerInterval = null;
     let mSeconds = 0;
-    let mStartTime = 0;
-    let mWakeLock = null;
-    let mSilentAudio = null;
     let mIsRecording = false;
     let mArchiveRecords = [];
     let mPendingQueue = [];
@@ -421,43 +420,6 @@
     let activeQueueRecordId = null;
     let currentApiBase = localStorage.getItem('collabo_api_base') || '';
     let lastEndpointFetchAt = 0;
-
-    // スリープ中もバックグラウンド録音を維持するための微小無音オーディオ（1秒無音WAV）
-    function initSilentAudio() {
-      if (!mSilentAudio) {
-        const silentWavBase64 = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
-        mSilentAudio = new Audio(silentWavBase64);
-        mSilentAudio.loop = true;
-      }
-    }
-
-    async function requestWakeLock() {
-      try {
-        if ('wakeLock' in navigator) {
-          mWakeLock = await navigator.wakeLock.request('screen');
-        }
-      } catch (err) {
-        console.warn('[WakeLock] スリープ防止取得スキップ:', err);
-      }
-    }
-
-    function releaseWakeLock() {
-      if (mWakeLock) {
-        try { mWakeLock.release(); } catch (e) {}
-        mWakeLock = null;
-      }
-    }
-
-    // 画面復帰時のWakeLock再取得＆実経過時間補正
-    document.addEventListener('visibilitychange', async () => {
-      if (document.visibilityState === 'visible' && mIsRecording) {
-        await requestWakeLock();
-        if (mStartTime > 0) {
-          mSeconds = Math.floor((Date.now() - mStartTime) / 1000);
-          updateMobileTimer();
-        }
-      }
-    });
 
     function isStaticCloudHost() {
       return window.location.hostname.endsWith('github.io');
@@ -777,7 +739,66 @@
       } catch (e) {}
     }
 
-    // 録音開始/停止トグル (100% オフラインセーフ)
+    // ==========================================
+    // 録音ロジック ＆ スリープ・バックグラウンド防止機構
+    // ==========================================
+    let mMediaRecorder = null;
+    let mAudioChunks = [];
+    let mIsRecording = false;
+    let mTimerInterval = null;
+    let mSeconds = 0;
+    let mRecordStartTime = 0;
+    let mWakeLock = null;
+    let mSilentAudio = null;
+
+    // 極小無音WAV Data URI (iOS/Androidバックグラウンドオーディオセッション維持用)
+    const SILENT_AUDIO_URI = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          mWakeLock = await navigator.wakeLock.request('screen');
+          mWakeLock.addEventListener('release', () => {
+            mWakeLock = null;
+          });
+        }
+      } catch (err) {
+        console.warn('Wake Lock request skipped/failed:', err);
+      }
+    }
+
+    function releaseWakeLock() {
+      if (mWakeLock) {
+        mWakeLock.release().catch(() => {});
+        mWakeLock = null;
+      }
+    }
+
+    function startSilentAudio() {
+      try {
+        if (!mSilentAudio) {
+          mSilentAudio = new Audio(SILENT_AUDIO_URI);
+          mSilentAudio.loop = true;
+        }
+        mSilentAudio.play().catch(e => console.warn('Silent audio play blocked:', e));
+      } catch (e) {}
+    }
+
+    function stopSilentAudio() {
+      if (mSilentAudio) {
+        mSilentAudio.pause();
+        mSilentAudio.currentTime = 0;
+      }
+    }
+
+    // アプリ復帰時に録音中ならWakeLockを再取得
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && mIsRecording) {
+        await requestWakeLock();
+      }
+    });
+
+    // 録音開始/停止トグル (100% オフラインセーフ ＆ スリープ耐性完備)
     async function toggleRecording() {
       if (!mIsRecording) {
         // 録音開始
@@ -828,29 +849,31 @@
 
           mMediaRecorder.start(1000);
           mIsRecording = true;
-          mStartTime = Date.now();
+          mRecordStartTime = Date.now();
           mSeconds = 0;
           updateMobileTimer();
+
+          // スリープ・消灯防止（WakeLock取得 ＆ サイレントオーディオ再生開始）
+          await requestWakeLock();
+          startSilentAudio();
+
+          // 実時刻ベースのタイマー（スリープ復帰時も1秒の狂いなく正確に追従）
           mTimerInterval = setInterval(() => {
-            mSeconds = Math.floor((Date.now() - mStartTime) / 1000);
+            mSeconds = Math.floor((Date.now() - mRecordStartTime) / 1000);
             updateMobileTimer();
           }, 1000);
-
-          // 1. 画面の自動消灯・スリープを完全防止 (Screen Wake Lock)
-          await requestWakeLock();
-
-          // 2. 画面を手動で消した時のバックグラウンド録音維持（無音オーディオ再生）
-          try {
-            initSilentAudio();
-            if (mSilentAudio) mSilentAudio.play().catch(e => console.warn('Silent audio play blocked:', e));
-          } catch (e) {}
 
           document.getElementById('m-record-icon').textContent = '⏹️';
           document.getElementById('m-record-label').textContent = '停止';
           document.getElementById('m-record-btn').className = 'w-24 h-24 rounded-full bg-slate-800 text-rose-400 border-4 border-rose-600 flex flex-col items-center justify-center shadow-xl transition-transform active:scale-95 animate-pulse';
           document.getElementById('m-pulse').classList.remove('hidden');
           document.getElementById('m-pulse').classList.add('flex');
-          showToast('マイク録音を開始しました（スリープ防止有効）', 'info');
+          const wlBadge = document.getElementById('m-wakelock-badge');
+          if (wlBadge) {
+            wlBadge.classList.remove('hidden');
+            wlBadge.classList.add('flex');
+          }
+          showToast('マイク録音を開始しました（画面スリープ防止中）', 'info');
         } catch (err) {
           showToast('マイクアクセスが許可されていません: ' + err.message, 'error');
         }
@@ -866,16 +889,20 @@
         }
         mIsRecording = false;
 
-        // スリープ防止解除 ＆ 無音オーディオ停止
+        // スリープ防止とサイレントオーディオを解除
         releaseWakeLock();
-        if (mSilentAudio) {
-          try { mSilentAudio.pause(); } catch (e) {}
-        }
+        stopSilentAudio();
+
         document.getElementById('m-record-icon').textContent = '⏺️';
         document.getElementById('m-record-label').textContent = '再録音';
         document.getElementById('m-record-btn').className = 'w-24 h-24 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center shadow-xl border-4 border-slate-900 transition-transform active:scale-95';
         document.getElementById('m-pulse').classList.remove('flex');
         document.getElementById('m-pulse').classList.add('hidden');
+        const wlBadge = document.getElementById('m-wakelock-badge');
+        if (wlBadge) {
+          wlBadge.classList.remove('flex');
+          wlBadge.classList.add('hidden');
+        }
       }
     }
 
