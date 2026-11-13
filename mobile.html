@@ -330,7 +330,7 @@
     // PWA Service Worker 登録
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=10').then(reg => {
           reg.update();
         }).catch(err => console.log('SW registration:', err));
       });
@@ -439,15 +439,34 @@
         return currentApiBase;
       }
       const now = Date.now();
-      if (!force && currentApiBase && (now - lastEndpointFetchAt < 15000)) {
+      if (!force && currentApiBase && (now - lastEndpointFetchAt < 10000)) {
         return currentApiBase;
       }
       lastEndpointFetchAt = now;
 
-      // 1. GitHub Contents API (キャッシュ遅延ゼロ・即時反映)
+      // 1. 同一オリジンの ./endpoint.json を最優先（超高速・レート制限なし）
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 2500);
+        const t = setTimeout(() => ctrl.abort(), 1500);
+        const res = await fetch('./endpoint.json?t=' + now, {
+          cache: 'no-store',
+          signal: ctrl.signal
+        });
+        clearTimeout(t);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.tunnel_url) {
+            currentApiBase = data.tunnel_url.replace(/\/+$/, '');
+            localStorage.setItem('collabo_api_base', currentApiBase);
+            return currentApiBase;
+          }
+        }
+      } catch (e) {}
+
+      // 2. フォールバック: GitHub Contents API
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 1500);
         const res = await fetch('https://api.github.com/repos/collabojapan-admin/minutes-ai/contents/endpoint.json?t=' + now, {
           cache: 'no-store',
           signal: ctrl.signal
@@ -466,153 +485,175 @@
         }
       } catch (e) {}
 
-      // 2. フォールバック: 同一オリジンの ./endpoint.json
-      try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 2000);
-        const res = await fetch('./endpoint.json?t=' + now, {
-          cache: 'no-store',
-          signal: ctrl.signal
-        });
-        clearTimeout(t);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.tunnel_url) {
-            currentApiBase = data.tunnel_url.replace(/\/+$/, '');
-            localStorage.setItem('collabo_api_base', currentApiBase);
-            return currentApiBase;
-          }
-        }
-      } catch (e) {}
-
       return currentApiBase;
+    }
+
+    // UIバッジの確実な更新関数
+    function updateStatusUI(online) {
+      const pill = document.getElementById('mobile-status-pill');
+      const dot = document.getElementById('mobile-status-dot');
+      const txt = document.getElementById('mobile-status-text');
+      if (!pill || !dot || !txt) return;
+
+      isServerOnline = !!online;
+      if (isServerOnline) {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0';
+        txt.textContent = 'PC接続中 (オンライン)';
+        pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
+      } else {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0';
+        txt.textContent = 'オフライン (スマホ内保存)';
+        pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
+      }
+      updateGenerateBtnState();
+      renderQueueItems();
     }
 
     // 初期起動
     document.addEventListener('DOMContentLoaded', async () => {
-      await refreshPendingQueue();
+      // 3秒以内に判定が終わらなければ強制的にオフライン表示に確定（永久「接続確認中...」の完全防止）
+      setTimeout(() => {
+        const txt = document.getElementById('mobile-status-text');
+        if (txt && (txt.textContent === '接続確認中...' || txt.textContent === '確認中...')) {
+          updateStatusUI(false);
+        }
+      }, 2500);
+
+      try {
+        await refreshPendingQueue();
+      } catch (e) {
+        console.warn('refreshPendingQueue error:', e);
+      }
       await checkServerHealth(true);
-      await loadMobileCompanies();
-      await loadMobileArchive();
-      setInterval(() => checkServerHealth(false), 6000); // 6秒おきにPCサーバー生存監視
+      try {
+        await loadMobileCompanies();
+        await loadMobileArchive();
+      } catch (e) {
+        console.warn('loadMobileCompanies/Archive error:', e);
+      }
+      setInterval(() => checkServerHealth(false), 8000); // 8秒おきにPCサーバー生存監視
     });
 
-    // サーバー導通チェック
+    // サーバー導通チェック（決して接続確認中のまま固まらない設計）
     async function checkServerHealth(forceResolve = false) {
-      const pill = document.getElementById('mobile-status-pill');
-      const dot = document.getElementById('mobile-status-dot');
-      const txt = document.getElementById('mobile-status-text');
       const wasOnline = isServerOnline;
+      let ok = false;
 
-      if (isStaticCloudHost() || forceResolve) {
-        await resolveApiBase(forceResolve);
-      }
+      try {
+        async function pingConfig(base) {
+          if (!base && isStaticCloudHost()) return false;
+          const url = (base ? base.replace(/\/+$/, '') : '') + '/api/minutes/config?t=' + Date.now();
+          const ctrl = new AbortController();
+          const timeout = setTimeout(() => ctrl.abort(), 2000);
+          try {
+            const res = await fetch(url, {
+              cache: 'no-store',
+              signal: ctrl.signal
+            });
+            clearTimeout(timeout);
+            if (res.ok) {
+              const data = await res.json();
+              if (data && data.success === true && !data.offline) {
+                return true;
+              }
+            }
+          } catch (e) {
+            clearTimeout(timeout);
+          }
+          return false;
+        }
 
-      async function pingConfig(base) {
-        const url = (base ? base.replace(/\/+$/, '') : '') + '/api/minutes/config?t=' + Date.now();
-        const ctrl = new AbortController();
-        const timeout = setTimeout(() => ctrl.abort(), 3000);
-        try {
-          const res = await fetch(url, {
-            cache: 'no-store',
-            signal: ctrl.signal
-          });
-          clearTimeout(timeout);
-          if (res.ok) {
-            const data = await res.json();
-            if (data && data.success === true && !data.offline) {
-              return true;
+        if (!isStaticCloudHost()) {
+          ok = await pingConfig('');
+          if (ok) currentApiBase = '';
+        }
+
+        if (!ok) {
+          // 保存済みまたは現在のAPIベースでチェック
+          if (currentApiBase) {
+            ok = await pingConfig(currentApiBase);
+          }
+          // 未導通または強制解決時は endpoint.json を再取得してチェック
+          if (!ok || forceResolve) {
+            const freshBase = await resolveApiBase(true);
+            if (freshBase && freshBase !== currentApiBase) {
+              ok = await pingConfig(freshBase);
+            } else if (!ok && freshBase) {
+              ok = await pingConfig(freshBase);
             }
           }
-        } catch (e) {
-          clearTimeout(timeout);
         }
-        return false;
-      }
-
-      let ok = false;
-      if (!isStaticCloudHost()) {
-        ok = await pingConfig('');
-        if (ok) {
-          currentApiBase = '';
-        }
-      }
-
-      if (!ok) {
-        if (currentApiBase) {
-          ok = await pingConfig(currentApiBase);
-        }
-        if (!ok) {
-          const freshBase = await resolveApiBase(true);
-          if (freshBase) {
-            ok = await pingConfig(freshBase);
-          }
-        }
-      }
-
-      if (ok) {
-        isServerOnline = true;
-        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0';
-        txt.textContent = 'PC接続中 (オンライン)';
-        pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
-        updateGenerateBtnState();
-        renderQueueItems();
-        if (!wasOnline) {
+      } catch (err) {
+        console.error('checkServerHealth exception:', err);
+        ok = false;
+      } finally {
+        // 例外が発生しても必ずUIを更新して「接続確認中...」を消す
+        updateStatusUI(ok);
+        if (ok && !wasOnline) {
           loadMobileCompanies();
           loadMobileArchive();
         }
-        return;
       }
-
-      // サーバー不達・オフライン時の確実なUI反映
-      isServerOnline = false;
-      dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0';
-      txt.textContent = 'オフライン (スマホ内保存)';
-      pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
-      updateGenerateBtnState();
-      renderQueueItems();
+      return ok;
     }
 
     // 手動で接続状態を再チェック
     async function manualCheckServerHealth() {
       const dot = document.getElementById('mobile-status-dot');
       const txt = document.getElementById('mobile-status-text');
-      dot.className = 'w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping shrink-0';
-      txt.textContent = '確認中...';
-      await checkServerHealth(true);
-      if (isServerOnline) {
-        showToast('PCと正常に接続されています（オンライン）', 'success');
-      } else {
-        showToast('サーバー停止中（オフライン・スマホ内保存）', 'warning');
+      if (dot) dot.className = 'w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping shrink-0';
+      if (txt) txt.textContent = '確認中...';
+
+      try {
+        const isOk = await checkServerHealth(true);
+        if (isOk) {
+          showToast('PCと正常に接続されています（オンライン）', 'success');
+        } else {
+          showToast('PC未接続（オフライン・スマホ内安全保存）', 'warning');
+        }
+      } catch (e) {
+        updateStatusUI(false);
+        showToast('接続チェック失敗（オフラインモード）', 'warning');
       }
     }
 
-    // アプリの強制最新化リフレッシュ（キャッシュクリア＆即時更新）
+    // アプリの即時リフレッシュ（接続再チェック＋企業リスト更新＋最新化）
     async function forceAppRefresh() {
       const icon = document.getElementById('refresh-icon');
       if (icon) icon.classList.add('animate-spin');
-      showToast('最新プログラムを取得中...', 'info');
+      showToast('最新データを取得・同期中...', 'info');
 
       try {
-        if ('serviceWorker' in navigator) {
-          const regs = await navigator.serviceWorker.getRegistrations();
-          for (const reg of regs) {
-            await reg.update();
-          }
-        }
-        if ('caches' in window) {
-          const keys = await caches.keys();
-          for (const key of keys) {
-            if (!key.includes('v9')) {
-              await caches.delete(key);
-            }
-          }
-        }
-      } catch (e) {}
+        // 1. まず即時でPC接続確認と企業マスターを再取得
+        const isOk = await checkServerHealth(true);
+        await loadMobileCompanies();
+        await refreshPendingQueue();
 
-      setTimeout(() => {
-        window.location.reload();
-      }, 500);
+        // 2. ServiceWorkerの更新確認（バックグラウンド）
+        if ('serviceWorker' in navigator) {
+          try {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            for (const reg of regs) {
+              await reg.update();
+            }
+          } catch (e) {}
+        }
+
+        if (isOk) {
+          showToast('PC接続完了！最新マスターを同期しました', 'success');
+        } else {
+          showToast('オフラインモードで最新化完了（録音可能です）', 'info');
+        }
+      } catch (e) {
+        console.error('forceAppRefresh error:', e);
+        showToast('リフレッシュ完了', 'info');
+      } finally {
+        if (icon) {
+          setTimeout(() => {
+            icon.classList.remove('animate-spin');
+          }, 600);
+        }
+      }
     }
 
     function updateGenerateBtnState() {
