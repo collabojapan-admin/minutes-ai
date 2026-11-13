@@ -705,7 +705,7 @@
       showToast('会議情報をクリアしました', 'info');
     }
 
-    // 企業マスター読み込み
+    // 企業マスター読み込み（オフラインキャッシュ保護付き）
     async function loadMobileCompanies() {
       const sel = document.getElementById('m-company');
       // まずキャッシュがあれば即時展開（オフラインでも即座に企業選択肢を表示）
@@ -721,11 +721,11 @@
         }
       } catch (e) {}
 
-      // サーバーがオンラインなら最新企業マスターを取得してキャッシュ更新
+      // サーバーがオンラインなら最新企業マスターを取得してキャッシュ更新（0件の時は既存キャッシュを保護）
       try {
         const res = await fetch(getApiUrl('/api/minutes/companies'));
         const d = await res.json();
-        if (d.success && Array.isArray(d.companies)) {
+        if (d.success && Array.isArray(d.companies) && d.companies.length > 0) {
           let html = '<option value="">（該当なし・内部）</option>';
           d.companies.forEach(c => {
             html += `<option value="${c.name}">${c.name}</option>`;
