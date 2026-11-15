@@ -330,7 +330,7 @@
     // PWA Service Worker 登録
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=10').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=12').then(reg => {
           reg.update();
         }).catch(err => console.log('SW registration:', err));
       });
@@ -746,7 +746,13 @@
       document.getElementById('m-category').value = '内部定例ミーティング';
       document.getElementById('m-company').value = '';
       document.getElementById('m-attendees').value = '';
-      showToast('会議情報をクリアしました', 'info');
+      mAudioBlob = null;
+      mAudioChunks = [];
+      activeQueueRecordId = null;
+      const previewBox = document.getElementById('m-preview-box');
+      if (previewBox) previewBox.classList.add('hidden');
+      updateGenerateBtnState();
+      showToast('会議情報と音声データをクリアしました', 'info');
     }
 
     // 企業マスター読み込み（オフラインキャッシュ保護付き）
@@ -1054,6 +1060,20 @@
               document.getElementById('m-result-box').classList.remove('hidden');
               document.getElementById('m-result-box').scrollIntoView({ behavior: 'smooth' });
 
+              // 【最重要】同一音声の二度押し・二重生成・サーバー重複保存を物理的に完全防止
+              mAudioBlob = null;
+              mAudioChunks = [];
+              activeQueueRecordId = null;
+
+              // ボタンを「生成完了」ロック表示に変更
+              genBtn.disabled = true;
+              genBtn.className = 'w-full py-3.5 bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 rounded-xl text-xs font-bold shadow-lg transition flex items-center justify-center gap-2 cursor-default';
+              genBtn.innerHTML = '<span>✅</span> AI議事録の生成が完了しました（二重保存防止ロック中）';
+
+              // プレビュー表示更新
+              const sizeEl = document.getElementById('m-preview-size');
+              if (sizeEl) sizeEl.textContent = '（生成完了・Obsidian保管済）';
+
               // キューの該当アイテムを削除または同期済みに更新
               if (queueId) {
                 await dbDeleteRecording(queueId);
@@ -1070,9 +1090,13 @@
             showToast('通信エラー: ' + err.message, 'error');
             reject(err);
           } finally {
-            genBtn.disabled = false;
-            genBtn.classList.remove('opacity-50', 'cursor-not-allowed');
             loading.classList.add('hidden');
+            // 音声データが残っている場合（失敗時など）のみ再試行可能に戻す
+            if (mAudioBlob) {
+              genBtn.disabled = false;
+              genBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+              updateGenerateBtnState();
+            }
           }
         };
       });
