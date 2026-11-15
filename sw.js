@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v10 - Ultra-fast health check & resilient connection)
-const CACHE_NAME = 'collabo-minutes-pwa-v10';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v11 - AI Model label update to Gemini 3.5 Flash)
+const CACHE_NAME = 'collabo-minutes-pwa-v11';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
