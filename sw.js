@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v12 - Prevent duplicate minutes generation & double-click guard)
-const CACHE_NAME = 'collabo-minutes-pwa-v12';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v13 - Add archive delete & lightning-fast feedback)
+const CACHE_NAME = 'collabo-minutes-pwa-v13';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
