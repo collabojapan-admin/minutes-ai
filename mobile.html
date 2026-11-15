@@ -330,7 +330,7 @@
     // PWA Service Worker 登録
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=12').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=13').then(reg => {
           reg.update();
         }).catch(err => console.log('SW registration:', err));
       });
@@ -1318,18 +1318,22 @@
             ${r.company ? `<span class="px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-300 font-semibold">${r.company}</span>` : ''}
           </div>
           <div class="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-800/80">
-            <button type="button" onclick="loadToEditor('${r.id}')" class="px-2 py-0.5 bg-indigo-950 text-indigo-300 rounded text-[11px] font-semibold border border-indigo-700/60">
-              開く
+            <button type="button" onclick="deleteMobileArchive('${r.id}', this)" class="px-2 py-0.5 bg-rose-950/70 text-rose-300 rounded text-[11px] font-semibold border border-rose-700/60 mr-auto flex items-center gap-1 active:scale-95 transition" title="この議事録を完全に削除">
+              <span>🗑️</span> 削除
             </button>
-            <button type="button" onclick="window.location.href=getApiUrl('/api/minutes/download_docx?id=${encodeURIComponent(r.id)}')" class="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[11px]">
-              Word
+            <button type="button" onclick="loadToEditor('${r.id}', this)" class="px-2 py-0.5 bg-indigo-950 text-indigo-300 rounded text-[11px] font-semibold border border-indigo-700/60 flex items-center gap-1 active:scale-95 transition">
+              <span>✏️</span> 開く
+            </button>
+            <button type="button" onclick="window.location.href=getApiUrl('/api/minutes/download_docx?id=${encodeURIComponent(r.id)}')" class="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[11px] active:scale-95 transition flex items-center gap-1">
+              <span>📄</span> Word
             </button>
           </div>
         </div>
       `).join('');
     }
 
-    async function loadToEditor(id) {
+    async function loadToEditor(id, btn) {
+      if (btn) btn.innerHTML = '<span>⏳</span> 読込中...';
       try {
         const res = await fetch(getApiUrl(`/api/minutes/detail?id=${encodeURIComponent(id)}`));
         const d = await res.json();
@@ -1341,15 +1345,62 @@
           document.getElementById('m-company').value = rec.company || '';
           document.getElementById('m-attendees').value = rec.attendees || '';
           document.getElementById('m-editor').value = rec.markdown || '';
-          document.getElementById('m-result-box').classList.remove('hidden');
+          const resultBox = document.getElementById('m-result-box');
+          resultBox.classList.remove('hidden');
+          
+          // エディタカードをパッとエメラルド発光ハイライト
+          resultBox.classList.remove('ring-2', 'ring-indigo-400');
+          void resultBox.offsetWidth;
+          resultBox.classList.add('ring-2', 'ring-indigo-400');
+          setTimeout(() => resultBox.classList.remove('ring-2', 'ring-indigo-400'), 800);
+
           switchMobileTab('record');
-          document.getElementById('m-result-box').scrollIntoView({ behavior: 'smooth' });
-          showToast(`「${rec.title}」をエディタに読み込みました`, 'info');
+          resultBox.scrollIntoView({ behavior: 'smooth' });
+          showToast(`「${rec.title}」をエディタに読み込みました`, 'success');
         } else {
           showToast('読込失敗: ' + (d.error || ''), 'error');
         }
       } catch (e) {
         showToast('読込エラー: ' + e.message, 'error');
+      } finally {
+        if (btn) btn.innerHTML = '<span>✏️</span> 開く';
+      }
+    }
+
+    // PWAアーカイブからの完全削除
+    async function deleteMobileArchive(id, btn) {
+      if (!confirm('この議事録を完全に削除しますか？\n（※Obsidianナレッジ・Word・一時音声・履歴がすべて消去されます）')) return;
+
+      const card = btn ? btn.closest('.bg-slate-950') : null;
+      if (card) {
+        card.style.transition = 'all 0.25s ease';
+        card.style.opacity = '0.3';
+        card.style.transform = 'scale(0.96)';
+      }
+
+      try {
+        const res = await fetch(getApiUrl('/api/minutes/delete'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        const d = await res.json();
+        if (d.success) {
+          showToast('議事録を一括削除しました', 'info');
+          if (card) card.remove();
+          if (mMinutesId === id) {
+            mMinutesId = '';
+            document.getElementById('m-editor').value = '';
+          }
+          mArchiveRecords = mArchiveRecords.filter(r => r.id !== id);
+          renderMobileArchive();
+        } else {
+          if (card) { card.style.opacity = '1'; card.style.transform = 'none'; }
+          showToast('削除失敗: ' + (d.error || ''), 'error');
+        }
+      } catch (e) {
+        if (card) { card.style.opacity = '1'; card.style.transform = 'none'; }
+        showToast('通信エラー: ' + e.message, 'error');
       }
     }
 
