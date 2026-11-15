@@ -118,7 +118,12 @@
           <h2 class="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
             <span>📝</span> 会議・面談の情報
           </h2>
-          <span class="text-[10px] text-slate-500">※未入力でも即時録音可能</span>
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="clearMobileMetaForm()" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-md text-[10px] font-medium transition flex items-center gap-1 border border-slate-700" title="入力内容をクリア">
+              <span>🔄</span> クリア
+            </button>
+            <span class="text-[10px] text-slate-500">※未入力でも即時録音可能</span>
+          </div>
         </div>
 
         <div class="space-y-2.5">
@@ -162,6 +167,9 @@
           <div id="m-pulse" class="hidden items-center justify-center gap-1.5 mt-2 text-xs font-semibold text-rose-400">
             <span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
             録音中（音声を収音しています）
+          </div>
+          <div id="m-wakelock-badge" class="hidden items-center justify-center gap-1 mt-1.5 text-[11px] font-medium text-amber-300 bg-amber-950/60 border border-amber-700/50 rounded-full px-3 py-0.5">
+            <span>🔆</span> 画面スリープ防止中（机の上に置いたまま録音継続可能）
           </div>
           <p id="m-offline-hint" class="text-[11px] text-slate-400 mt-1">※PCがシャットダウンしていてもスマホ単体で安全に録音できます</p>
         </div>
@@ -207,7 +215,7 @@
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
             </svg>
-            <span id="m-loading-title">Gemini 2.5 Flash で解析・議事録作成中...</span>
+            <span id="m-loading-title">Gemini 3.5 Flash で解析・議事録作成中...</span>
           </div>
           <p class="text-[10px] text-slate-400">※長尺音声も約15〜30秒で完了します</p>
         </div>
@@ -322,7 +330,7 @@
     // PWA Service Worker 登録
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=10').then(reg => {
           reg.update();
         }).catch(err => console.log('SW registration:', err));
       });
@@ -431,15 +439,34 @@
         return currentApiBase;
       }
       const now = Date.now();
-      if (!force && currentApiBase && (now - lastEndpointFetchAt < 15000)) {
+      if (!force && currentApiBase && (now - lastEndpointFetchAt < 10000)) {
         return currentApiBase;
       }
       lastEndpointFetchAt = now;
 
-      // 1. GitHub Contents API (キャッシュ遅延ゼロ・即時反映)
+      // 1. 同一オリジンの ./endpoint.json を最優先（超高速・レート制限なし）
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 2500);
+        const t = setTimeout(() => ctrl.abort(), 1500);
+        const res = await fetch('./endpoint.json?t=' + now, {
+          cache: 'no-store',
+          signal: ctrl.signal
+        });
+        clearTimeout(t);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.tunnel_url) {
+            currentApiBase = data.tunnel_url.replace(/\/+$/, '');
+            localStorage.setItem('collabo_api_base', currentApiBase);
+            return currentApiBase;
+          }
+        }
+      } catch (e) {}
+
+      // 2. フォールバック: GitHub Contents API
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 1500);
         const res = await fetch('https://api.github.com/repos/collabojapan-admin/minutes-ai/contents/endpoint.json?t=' + now, {
           cache: 'no-store',
           signal: ctrl.signal
@@ -458,153 +485,175 @@
         }
       } catch (e) {}
 
-      // 2. フォールバック: 同一オリジンの ./endpoint.json
-      try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 2000);
-        const res = await fetch('./endpoint.json?t=' + now, {
-          cache: 'no-store',
-          signal: ctrl.signal
-        });
-        clearTimeout(t);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.tunnel_url) {
-            currentApiBase = data.tunnel_url.replace(/\/+$/, '');
-            localStorage.setItem('collabo_api_base', currentApiBase);
-            return currentApiBase;
-          }
-        }
-      } catch (e) {}
-
       return currentApiBase;
+    }
+
+    // UIバッジの確実な更新関数
+    function updateStatusUI(online) {
+      const pill = document.getElementById('mobile-status-pill');
+      const dot = document.getElementById('mobile-status-dot');
+      const txt = document.getElementById('mobile-status-text');
+      if (!pill || !dot || !txt) return;
+
+      isServerOnline = !!online;
+      if (isServerOnline) {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0';
+        txt.textContent = 'PC接続中 (オンライン)';
+        pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
+      } else {
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0';
+        txt.textContent = 'オフライン (スマホ内保存)';
+        pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
+      }
+      updateGenerateBtnState();
+      renderQueueItems();
     }
 
     // 初期起動
     document.addEventListener('DOMContentLoaded', async () => {
-      await refreshPendingQueue();
+      // 3秒以内に判定が終わらなければ強制的にオフライン表示に確定（永久「接続確認中...」の完全防止）
+      setTimeout(() => {
+        const txt = document.getElementById('mobile-status-text');
+        if (txt && (txt.textContent === '接続確認中...' || txt.textContent === '確認中...')) {
+          updateStatusUI(false);
+        }
+      }, 2500);
+
+      try {
+        await refreshPendingQueue();
+      } catch (e) {
+        console.warn('refreshPendingQueue error:', e);
+      }
       await checkServerHealth(true);
-      await loadMobileCompanies();
-      await loadMobileArchive();
-      setInterval(() => checkServerHealth(false), 6000); // 6秒おきにPCサーバー生存監視
+      try {
+        await loadMobileCompanies();
+        await loadMobileArchive();
+      } catch (e) {
+        console.warn('loadMobileCompanies/Archive error:', e);
+      }
+      setInterval(() => checkServerHealth(false), 8000); // 8秒おきにPCサーバー生存監視
     });
 
-    // サーバー導通チェック
+    // サーバー導通チェック（決して接続確認中のまま固まらない設計）
     async function checkServerHealth(forceResolve = false) {
-      const pill = document.getElementById('mobile-status-pill');
-      const dot = document.getElementById('mobile-status-dot');
-      const txt = document.getElementById('mobile-status-text');
       const wasOnline = isServerOnline;
+      let ok = false;
 
-      if (isStaticCloudHost() || forceResolve) {
-        await resolveApiBase(forceResolve);
-      }
+      try {
+        async function pingConfig(base) {
+          if (!base && isStaticCloudHost()) return false;
+          const url = (base ? base.replace(/\/+$/, '') : '') + '/api/minutes/config?t=' + Date.now();
+          const ctrl = new AbortController();
+          const timeout = setTimeout(() => ctrl.abort(), 2000);
+          try {
+            const res = await fetch(url, {
+              cache: 'no-store',
+              signal: ctrl.signal
+            });
+            clearTimeout(timeout);
+            if (res.ok) {
+              const data = await res.json();
+              if (data && data.success === true && !data.offline) {
+                return true;
+              }
+            }
+          } catch (e) {
+            clearTimeout(timeout);
+          }
+          return false;
+        }
 
-      async function pingConfig(base) {
-        const url = (base ? base.replace(/\/+$/, '') : '') + '/api/minutes/config?t=' + Date.now();
-        const ctrl = new AbortController();
-        const timeout = setTimeout(() => ctrl.abort(), 3000);
-        try {
-          const res = await fetch(url, {
-            cache: 'no-store',
-            signal: ctrl.signal
-          });
-          clearTimeout(timeout);
-          if (res.ok) {
-            const data = await res.json();
-            if (data && data.success === true && !data.offline) {
-              return true;
+        if (!isStaticCloudHost()) {
+          ok = await pingConfig('');
+          if (ok) currentApiBase = '';
+        }
+
+        if (!ok) {
+          // 保存済みまたは現在のAPIベースでチェック
+          if (currentApiBase) {
+            ok = await pingConfig(currentApiBase);
+          }
+          // 未導通または強制解決時は endpoint.json を再取得してチェック
+          if (!ok || forceResolve) {
+            const freshBase = await resolveApiBase(true);
+            if (freshBase && freshBase !== currentApiBase) {
+              ok = await pingConfig(freshBase);
+            } else if (!ok && freshBase) {
+              ok = await pingConfig(freshBase);
             }
           }
-        } catch (e) {
-          clearTimeout(timeout);
         }
-        return false;
-      }
-
-      let ok = false;
-      if (!isStaticCloudHost()) {
-        ok = await pingConfig('');
-        if (ok) {
-          currentApiBase = '';
-        }
-      }
-
-      if (!ok) {
-        if (currentApiBase) {
-          ok = await pingConfig(currentApiBase);
-        }
-        if (!ok) {
-          const freshBase = await resolveApiBase(true);
-          if (freshBase) {
-            ok = await pingConfig(freshBase);
-          }
-        }
-      }
-
-      if (ok) {
-        isServerOnline = true;
-        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0';
-        txt.textContent = 'PC接続中 (オンライン)';
-        pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
-        updateGenerateBtnState();
-        renderQueueItems();
-        if (!wasOnline) {
+      } catch (err) {
+        console.error('checkServerHealth exception:', err);
+        ok = false;
+      } finally {
+        // 例外が発生しても必ずUIを更新して「接続確認中...」を消す
+        updateStatusUI(ok);
+        if (ok && !wasOnline) {
           loadMobileCompanies();
           loadMobileArchive();
         }
-        return;
       }
-
-      // サーバー不達・オフライン時の確実なUI反映
-      isServerOnline = false;
-      dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0';
-      txt.textContent = 'オフライン (スマホ内保存)';
-      pill.className = 'px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-950/80 text-amber-300 border border-amber-700/50 flex items-center gap-1 transition cursor-pointer whitespace-nowrap shrink-0';
-      updateGenerateBtnState();
-      renderQueueItems();
+      return ok;
     }
 
     // 手動で接続状態を再チェック
     async function manualCheckServerHealth() {
       const dot = document.getElementById('mobile-status-dot');
       const txt = document.getElementById('mobile-status-text');
-      dot.className = 'w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping shrink-0';
-      txt.textContent = '確認中...';
-      await checkServerHealth(true);
-      if (isServerOnline) {
-        showToast('PCと正常に接続されています（オンライン）', 'success');
-      } else {
-        showToast('サーバー停止中（オフライン・スマホ内保存）', 'warning');
+      if (dot) dot.className = 'w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping shrink-0';
+      if (txt) txt.textContent = '確認中...';
+
+      try {
+        const isOk = await checkServerHealth(true);
+        if (isOk) {
+          showToast('PCと正常に接続されています（オンライン）', 'success');
+        } else {
+          showToast('PC未接続（オフライン・スマホ内安全保存）', 'warning');
+        }
+      } catch (e) {
+        updateStatusUI(false);
+        showToast('接続チェック失敗（オフラインモード）', 'warning');
       }
     }
 
-    // アプリの強制最新化リフレッシュ（キャッシュクリア＆即時更新）
+    // アプリの即時リフレッシュ（接続再チェック＋企業リスト更新＋最新化）
     async function forceAppRefresh() {
       const icon = document.getElementById('refresh-icon');
       if (icon) icon.classList.add('animate-spin');
-      showToast('最新プログラムを取得中...', 'info');
+      showToast('最新データを取得・同期中...', 'info');
 
       try {
-        if ('serviceWorker' in navigator) {
-          const regs = await navigator.serviceWorker.getRegistrations();
-          for (const reg of regs) {
-            await reg.update();
-          }
-        }
-        if ('caches' in window) {
-          const keys = await caches.keys();
-          for (const key of keys) {
-            if (!key.includes('v9')) {
-              await caches.delete(key);
-            }
-          }
-        }
-      } catch (e) {}
+        // 1. まず即時でPC接続確認と企業マスターを再取得
+        const isOk = await checkServerHealth(true);
+        await loadMobileCompanies();
+        await refreshPendingQueue();
 
-      setTimeout(() => {
-        window.location.reload();
-      }, 500);
+        // 2. ServiceWorkerの更新確認（バックグラウンド）
+        if ('serviceWorker' in navigator) {
+          try {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            for (const reg of regs) {
+              await reg.update();
+            }
+          } catch (e) {}
+        }
+
+        if (isOk) {
+          showToast('PC接続完了！最新マスターを同期しました', 'success');
+        } else {
+          showToast('オフラインモードで最新化完了（録音可能です）', 'info');
+        }
+      } catch (e) {
+        console.error('forceAppRefresh error:', e);
+        showToast('リフレッシュ完了', 'info');
+      } finally {
+        if (icon) {
+          setTimeout(() => {
+            icon.classList.remove('animate-spin');
+          }, 600);
+        }
+      }
     }
 
     function updateGenerateBtnState() {
@@ -692,7 +741,15 @@
       if (tab === 'archive') loadMobileArchive();
     }
 
-    // 企業マスター読み込み
+    function clearMobileMetaForm() {
+      document.getElementById('m-title').value = '';
+      document.getElementById('m-category').value = '内部定例ミーティング';
+      document.getElementById('m-company').value = '';
+      document.getElementById('m-attendees').value = '';
+      showToast('会議情報をクリアしました', 'info');
+    }
+
+    // 企業マスター読み込み（オフラインキャッシュ保護付き）
     async function loadMobileCompanies() {
       const sel = document.getElementById('m-company');
       // まずキャッシュがあれば即時展開（オフラインでも即座に企業選択肢を表示）
@@ -708,11 +765,11 @@
         }
       } catch (e) {}
 
-      // サーバーがオンラインなら最新企業マスターを取得してキャッシュ更新
+      // サーバーがオンラインなら最新企業マスターを取得してキャッシュ更新（0件の時は既存キャッシュを保護）
       try {
         const res = await fetch(getApiUrl('/api/minutes/companies'));
         const d = await res.json();
-        if (d.success && Array.isArray(d.companies)) {
+        if (d.success && Array.isArray(d.companies) && d.companies.length > 0) {
           let html = '<option value="">（該当なし・内部）</option>';
           d.companies.forEach(c => {
             html += `<option value="${c.name}">${c.name}</option>`;
@@ -723,7 +780,61 @@
       } catch (e) {}
     }
 
-    // 録音開始/停止トグル (100% オフラインセーフ)
+    // ==========================================
+    // 録音ロジック ＆ スリープ・バックグラウンド防止機構
+    // ==========================================
+    let mRecordStartTime = 0;
+    let mWakeLock = null;
+    let mSilentAudio = null;
+
+    // 極小無音WAV Data URI (iOS/Androidバックグラウンドオーディオセッション維持用)
+    const SILENT_AUDIO_URI = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          mWakeLock = await navigator.wakeLock.request('screen');
+          mWakeLock.addEventListener('release', () => {
+            mWakeLock = null;
+          });
+        }
+      } catch (err) {
+        console.warn('Wake Lock request skipped/failed:', err);
+      }
+    }
+
+    function releaseWakeLock() {
+      if (mWakeLock) {
+        mWakeLock.release().catch(() => {});
+        mWakeLock = null;
+      }
+    }
+
+    function startSilentAudio() {
+      try {
+        if (!mSilentAudio) {
+          mSilentAudio = new Audio(SILENT_AUDIO_URI);
+          mSilentAudio.loop = true;
+        }
+        mSilentAudio.play().catch(e => console.warn('Silent audio play blocked:', e));
+      } catch (e) {}
+    }
+
+    function stopSilentAudio() {
+      if (mSilentAudio) {
+        mSilentAudio.pause();
+        mSilentAudio.currentTime = 0;
+      }
+    }
+
+    // アプリ復帰時に録音中ならWakeLockを再取得
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && mIsRecording) {
+        await requestWakeLock();
+      }
+    });
+
+    // 録音開始/停止トグル (100% オフラインセーフ ＆ スリープ耐性完備)
     async function toggleRecording() {
       if (!mIsRecording) {
         // 録音開始
@@ -774,10 +885,17 @@
 
           mMediaRecorder.start(1000);
           mIsRecording = true;
+          mRecordStartTime = Date.now();
           mSeconds = 0;
           updateMobileTimer();
+
+          // スリープ・消灯防止（WakeLock取得 ＆ サイレントオーディオ再生開始）
+          await requestWakeLock();
+          startSilentAudio();
+
+          // 実時刻ベースのタイマー（スリープ復帰時も1秒の狂いなく正確に追従）
           mTimerInterval = setInterval(() => {
-            mSeconds++;
+            mSeconds = Math.floor((Date.now() - mRecordStartTime) / 1000);
             updateMobileTimer();
           }, 1000);
 
@@ -786,7 +904,12 @@
           document.getElementById('m-record-btn').className = 'w-24 h-24 rounded-full bg-slate-800 text-rose-400 border-4 border-rose-600 flex flex-col items-center justify-center shadow-xl transition-transform active:scale-95 animate-pulse';
           document.getElementById('m-pulse').classList.remove('hidden');
           document.getElementById('m-pulse').classList.add('flex');
-          showToast('マイク録音を開始しました', 'info');
+          const wlBadge = document.getElementById('m-wakelock-badge');
+          if (wlBadge) {
+            wlBadge.classList.remove('hidden');
+            wlBadge.classList.add('flex');
+          }
+          showToast('マイク録音を開始しました（画面スリープ防止中）', 'info');
         } catch (err) {
           showToast('マイクアクセスが許可されていません: ' + err.message, 'error');
         }
@@ -801,11 +924,21 @@
           mTimerInterval = null;
         }
         mIsRecording = false;
+
+        // スリープ防止とサイレントオーディオを解除
+        releaseWakeLock();
+        stopSilentAudio();
+
         document.getElementById('m-record-icon').textContent = '⏺️';
         document.getElementById('m-record-label').textContent = '再録音';
         document.getElementById('m-record-btn').className = 'w-24 h-24 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center shadow-xl border-4 border-slate-900 transition-transform active:scale-95';
         document.getElementById('m-pulse').classList.remove('flex');
         document.getElementById('m-pulse').classList.add('hidden');
+        const wlBadge = document.getElementById('m-wakelock-badge');
+        if (wlBadge) {
+          wlBadge.classList.remove('flex');
+          wlBadge.classList.add('hidden');
+        }
       }
     }
 
@@ -1279,7 +1412,7 @@
             スマホで話すだけ！AIが議事録を自動作成
           </h2>
           <p class="text-xs text-indigo-200/80 mt-1 leading-relaxed">
-            訪問先での定期監査・労務面談・社内会議の音声をスマホで録音するだけで、Googleの最新AI（Gemini 2.5）が<strong>「決定事項」「ToDo」「話者別の文字起こし」</strong>を瞬時に整理してWord文書やデータベースへ自動保管します。
+            訪問先での定期監査・労務面談・社内会議の音声をスマホで録音するだけで、Googleの最新AI（Gemini 3.5 Flash）が<strong>「決定事項」「ToDo」「話者別の文字起こし」</strong>を瞬時に整理してWord文書やデータベースへ自動保管します。
           </p>
         </div>
       </div>
