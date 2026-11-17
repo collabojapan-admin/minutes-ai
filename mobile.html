@@ -144,10 +144,15 @@
               </select>
             </div>
             <div>
-              <label class="block text-[11px] font-medium text-slate-400 mb-1">対象企業 (SSOT)</label>
-              <select id="m-company" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500">
-                <option value="">（該当なし・内部）</option>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-[11px] font-medium text-slate-400">対象企業 (SSOT / 複数可)</label>
+                <span class="text-[9px] text-slate-500">選択で追加</span>
+              </div>
+              <select id="m-company-select" onchange="handleMobileCompanySelect(this)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500">
+                <option value="">＋ 企業を追加...</option>
               </select>
+              <div id="m-company-chips" class="flex flex-wrap gap-1.5 mt-1.5 min-h-[20px]"></div>
+              <input type="hidden" id="m-company" value="">
             </div>
           </div>
 
@@ -330,7 +335,7 @@
     // PWA Service Worker 登録
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=13').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=15').then(reg => {
           reg.update();
         }).catch(err => console.log('SW registration:', err));
       });
@@ -741,10 +746,57 @@
       if (tab === 'archive') loadMobileArchive();
     }
 
+    // 複数企業チップ選択管理（モバイルPWA）
+    let selectedMobileCompanies = [];
+
+    function renderMobileCompanyChips() {
+      const chipsEl = document.getElementById('m-company-chips');
+      const hiddenInput = document.getElementById('m-company');
+      if (!chipsEl || !hiddenInput) return;
+
+      hiddenInput.value = selectedMobileCompanies.join(' / ');
+
+      if (selectedMobileCompanies.length === 0) {
+        chipsEl.innerHTML = '<span class="text-[10px] text-slate-500 italic py-0.5">（指定なし・内部）</span>';
+        return;
+      }
+
+      chipsEl.innerHTML = selectedMobileCompanies.map(c => `
+        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950/80 border border-indigo-600/70 text-indigo-200 text-[11px] font-medium shadow-sm">
+          <span>${c}</span>
+          <button type="button" onclick="removeMobileCompany('${c.replace(/'/g, "\\'")}')" class="text-indigo-400 hover:text-white ml-0.5 hover:bg-indigo-800 rounded px-1 transition text-[10px]" title="削除">✕</button>
+        </span>
+      `).join('');
+    }
+
+    function handleMobileCompanySelect(selectEl) {
+      const val = selectEl.value;
+      if (!val) return;
+      if (!selectedMobileCompanies.includes(val)) {
+        selectedMobileCompanies.push(val);
+        renderMobileCompanyChips();
+      }
+      selectEl.value = '';
+    }
+
+    function removeMobileCompany(name) {
+      selectedMobileCompanies = selectedMobileCompanies.filter(c => c !== name);
+      renderMobileCompanyChips();
+    }
+
+    function setMobileCompaniesValue(val) {
+      if (!val || typeof val !== 'string') {
+        selectedMobileCompanies = [];
+      } else {
+        selectedMobileCompanies = val.split(/[/／,、・\n]+/).map(s => s.trim()).filter(s => s && !s.includes('該当なし') && !s.includes('内部'));
+      }
+      renderMobileCompanyChips();
+    }
+
     function clearMobileMetaForm() {
       document.getElementById('m-title').value = '';
       document.getElementById('m-category').value = '内部定例ミーティング';
-      document.getElementById('m-company').value = '';
+      setMobileCompaniesValue('');
       document.getElementById('m-attendees').value = '';
       mAudioBlob = null;
       mAudioChunks = [];
@@ -757,14 +809,17 @@
 
     // 企業マスター読み込み（オフラインキャッシュ保護付き）
     async function loadMobileCompanies() {
-      const sel = document.getElementById('m-company');
+      const sel = document.getElementById('m-company-select');
+      if (!sel) return;
+      renderMobileCompanyChips();
+
       // まずキャッシュがあれば即時展開（オフラインでも即座に企業選択肢を表示）
       try {
         const cached = localStorage.getItem('collabo_cached_companies');
         if (cached) {
           const list = JSON.parse(cached);
           if (Array.isArray(list) && list.length > 0) {
-            let html = '<option value="">（該当なし・内部）</option>';
+            let html = '<option value="">＋ 企業を追加...</option>';
             list.forEach(c => { html += `<option value="${c.name}">${c.name}</option>`; });
             sel.innerHTML = html;
           }
@@ -776,7 +831,7 @@
         const res = await fetch(getApiUrl('/api/minutes/companies'));
         const d = await res.json();
         if (d.success && Array.isArray(d.companies) && d.companies.length > 0) {
-          let html = '<option value="">（該当なし・内部）</option>';
+          let html = '<option value="">＋ 企業を追加...</option>';
           d.companies.forEach(c => {
             html += `<option value="${c.name}">${c.name}</option>`;
           });
@@ -1184,7 +1239,7 @@
       switchMobileTab('record');
       document.getElementById('m-title').value = item.title;
       document.getElementById('m-category').value = item.category;
-      document.getElementById('m-company').value = item.company;
+      setMobileCompaniesValue(item.company || '');
       document.getElementById('m-attendees').value = item.attendees;
 
       await executeGenerateApi(item.audioBlob, item.audioName, item.title, item.category, item.company, item.attendees, item.id);
@@ -1342,7 +1397,7 @@
           mMinutesId = rec.id;
           document.getElementById('m-title').value = rec.title || '';
           document.getElementById('m-category').value = rec.category || '内部定例ミーティング';
-          document.getElementById('m-company').value = rec.company || '';
+          setMobileCompaniesValue(rec.company || '');
           document.getElementById('m-attendees').value = rec.attendees || '';
           document.getElementById('m-editor').value = rec.markdown || '';
           const resultBox = document.getElementById('m-result-box');
