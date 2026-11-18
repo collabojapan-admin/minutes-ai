@@ -65,7 +65,7 @@
         </div>
         <div class="truncate flex items-center gap-1.5">
           <h1 class="text-xs font-bold text-white leading-tight truncate">議事録AI</h1>
-          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v18</span>
+          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v19</span>
         </div>
       </div>
 
@@ -200,10 +200,10 @@
 
         <!-- またはファイル選択 -->
         <div class="w-full pt-1 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
-          <span>既存の音声ファイルを投入:</span>
+          <span>既存の音声・録画(.mp4)を投入:</span>
           <label class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 rounded-lg cursor-pointer font-medium">
             ファイル選択
-            <input type="file" id="m-file-input" accept="audio/*,.m4a,.mp3,.wav,.webm" class="hidden" onchange="handleMobileFile(event)">
+            <input type="file" id="m-file-input" accept="audio/*,video/*,.mp4,.m4a,.mp3,.wav,.webm,.ogg,.mov,.aac" class="hidden" onchange="handleMobileFile(event)">
           </label>
         </div>
 
@@ -346,7 +346,7 @@
     // PWA Service Worker 登録 & 新バージョン即時検知・自動アクティベート
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=18').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=19').then(reg => {
           reg.update(); // 起動時に即座に最新版があるかチェック
           reg.onupdatefound = () => {
             const installingWorker = reg.installing;
