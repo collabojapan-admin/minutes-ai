@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v18 - Transcript-First AI, Domain Guardrails, 128kbps Audio & Notes field)
-const CACHE_NAME = 'collabo-minutes-pwa-v18';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v19 - MP4 Video & Fast Audio Extraction Support)
+const CACHE_NAME = 'collabo-minutes-pwa-v19';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
