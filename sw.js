@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v16 - Network-First auto-update & Multi-company chip selection)
-const CACHE_NAME = 'collabo-minutes-pwa-v16';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v17 - Clean full-width company layout & Multi-chip selection)
+const CACHE_NAME = 'collabo-minutes-pwa-v17';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
