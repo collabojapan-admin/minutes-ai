@@ -63,8 +63,9 @@
         <div class="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center text-sm shadow-md shadow-indigo-950 shrink-0">
           🎙️
         </div>
-        <div class="truncate">
+        <div class="truncate flex items-center gap-1.5">
           <h1 class="text-xs font-bold text-white leading-tight truncate">議事録AI</h1>
+          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v16</span>
         </div>
       </div>
 
@@ -332,12 +333,32 @@
 
   <!-- JavaScript -->
   <script>
-    // PWA Service Worker 登録
+    // PWA Service Worker 登録 & 新バージョン即時検知・自動アクティベート
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=15').then(reg => {
-          reg.update();
+        navigator.serviceWorker.register('./sw.js?v=16').then(reg => {
+          reg.update(); // 起動時に即座に最新版があるかチェック
+          reg.onupdatefound = () => {
+            const installingWorker = reg.installing;
+            if (installingWorker) {
+              installingWorker.onstatechange = () => {
+                if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  // 新しいSWがインストールされたら待機させずに即時適用
+                  installingWorker.postMessage({ type: 'SKIP_WAITING' });
+                }
+              };
+            }
+          };
         }).catch(err => console.log('SW registration:', err));
+
+        // 新しいSWが制御を開始したら、画面を一度だけ自動リロードして最新画面へシームレス移行
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!refreshing) {
+            refreshing = true;
+            window.location.reload();
+          }
+        });
       });
     }
 
@@ -626,38 +647,30 @@
     async function forceAppRefresh() {
       const icon = document.getElementById('refresh-icon');
       if (icon) icon.classList.add('animate-spin');
-      showToast('最新データを取得・同期中...', 'info');
+      showToast('キャッシュを完全クリアし、最新アプリを読み込み中...', 'info');
 
       try {
-        // 1. まず即時でPC接続確認と企業マスターを再取得
-        const isOk = await checkServerHealth(true);
-        await loadMobileCompanies();
-        await refreshPendingQueue();
-
-        // 2. ServiceWorkerの更新確認（バックグラウンド）
+        // 1. Service Workerの登録全解除
         if ('serviceWorker' in navigator) {
-          try {
-            const regs = await navigator.serviceWorker.getRegistrations();
-            for (const reg of regs) {
-              await reg.update();
-            }
-          } catch (e) {}
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const reg of regs) {
+            await reg.unregister();
+          }
         }
-
-        if (isOk) {
-          showToast('PC接続完了！最新マスターを同期しました', 'success');
-        } else {
-          showToast('オフラインモードで最新化完了（録音可能です）', 'info');
+        // 2. CacheStorageの全キャッシュキーを完全削除
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          for (const key of keys) {
+            await caches.delete(key);
+          }
         }
+        // 3. タイムスタンプを付与してHTTPキャッシュを完全回避し強制リロード
+        setTimeout(() => {
+          window.location.href = window.location.origin + window.location.pathname + '?v=' + Date.now();
+        }, 300);
       } catch (e) {
         console.error('forceAppRefresh error:', e);
-        showToast('リフレッシュ完了', 'info');
-      } finally {
-        if (icon) {
-          setTimeout(() => {
-            icon.classList.remove('animate-spin');
-          }, 600);
-        }
+        window.location.reload();
       }
     }
 
@@ -762,9 +775,9 @@
       }
 
       chipsEl.innerHTML = selectedMobileCompanies.map(c => `
-        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-950/80 border border-indigo-600/70 text-indigo-200 text-[11px] font-medium shadow-sm">
-          <span>${c}</span>
-          <button type="button" onclick="removeMobileCompany('${c.replace(/'/g, "\\'")}')" class="text-indigo-400 hover:text-white ml-0.5 hover:bg-indigo-800 rounded px-1 transition text-[10px]" title="削除">✕</button>
+        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-950/90 border border-indigo-500/80 text-indigo-200 text-xs font-semibold shadow-md">
+          <span>🏢 ${c}</span>
+          <button type="button" onclick="removeMobileCompany('${c.replace(/'/g, "\\'")}')" class="text-indigo-400 hover:text-rose-400 ml-1 hover:bg-indigo-900/60 rounded px-1 transition text-xs font-bold" title="削除">✕</button>
         </span>
       `).join('');
     }
@@ -775,6 +788,7 @@
       if (!selectedMobileCompanies.includes(val)) {
         selectedMobileCompanies.push(val);
         renderMobileCompanyChips();
+        showToast(`企業「${val}」を追加しました`, 'info');
       }
       selectEl.value = '';
     }
@@ -782,6 +796,7 @@
     function removeMobileCompany(name) {
       selectedMobileCompanies = selectedMobileCompanies.filter(c => c !== name);
       renderMobileCompanyChips();
+      showToast(`企業「${name}」を除外しました`, 'info');
     }
 
     function setMobileCompaniesValue(val) {
