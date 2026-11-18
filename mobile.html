@@ -65,7 +65,7 @@
         </div>
         <div class="truncate flex items-center gap-1.5">
           <h1 class="text-xs font-bold text-white leading-tight truncate">議事録AI</h1>
-          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v17</span>
+          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v18</span>
         </div>
       </div>
 
@@ -165,6 +165,11 @@
           <div>
             <label class="block text-[11px] font-medium text-slate-400 mb-1">出席者</label>
             <input type="text" id="m-attendees" placeholder="例: 竹内大吾, ○○社長, 指導員" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500">
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">重点メモ・キーワード <span class="text-[10px] text-slate-500 font-normal">（任意 / 専門用語・議題のヒント）</span></label>
+            <input type="text" id="m-notes" placeholder="例: 寮費の日割り精算、ビラさんの転籍・帰国条件" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500">
           </div>
         </div>
       </div>
@@ -341,7 +346,7 @@
     // PWA Service Worker 登録 & 新バージョン即時検知・自動アクティベート
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=17').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=18').then(reg => {
           reg.update(); // 起動時に即座に最新版があるかチェック
           reg.onupdatefound = () => {
             const installingWorker = reg.installing;
@@ -822,6 +827,8 @@
       document.getElementById('m-category').value = '内部定例ミーティング';
       setMobileCompaniesValue('');
       document.getElementById('m-attendees').value = '';
+      const notesEl = document.getElementById('m-notes');
+      if (notesEl) notesEl.value = '';
       mAudioBlob = null;
       mAudioChunks = [];
       activeQueueRecordId = null;
@@ -919,20 +926,54 @@
       }
     });
 
+    async function getHighQualityAudioStream() {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 48000,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+      } catch (e) {
+        return await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+    }
+
+    function createHighQualityRecorder(stream) {
+      const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+      for (const mime of candidates) {
+        try {
+          if (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(mime)) {
+            return new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: 128000 });
+          }
+        } catch (e) {}
+      }
+      try {
+        return new MediaRecorder(stream, { audioBitsPerSecond: 128000 });
+      } catch (e) {
+        return new MediaRecorder(stream);
+      }
+    }
+
     // 録音開始/停止トグル (100% オフラインセーフ ＆ スリープ耐性完備)
     async function toggleRecording() {
       if (!mIsRecording) {
         // 録音開始
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const stream = await getHighQualityAudioStream();
           mAudioChunks = [];
-          mMediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+          mMediaRecorder = createHighQualityRecorder(stream);
           mMediaRecorder.ondataavailable = e => {
             if (e.data && e.data.size > 0) mAudioChunks.push(e.data);
           };
           mMediaRecorder.onstop = async () => {
-            mAudioBlob = new Blob(mAudioChunks, { type: 'audio/webm' });
-            mAudioName = `現場録音_${new Date().toISOString().slice(0,10)}_${new Date().toTimeString().slice(0,8).replace(/:/g,'')}.webm`;
+            const recMime = ((mMediaRecorder && mMediaRecorder.mimeType) || 'audio/webm').split(';')[0];
+            const recExt = recMime.includes('mp4') ? 'm4a' : 'webm';
+            mAudioBlob = new Blob(mAudioChunks, { type: recMime });
+            mAudioName = `現場録音_${new Date().toISOString().slice(0,10)}_${new Date().toTimeString().slice(0,8).replace(/:/g,'')}.${recExt}`;
             
             // 停止直後に【即座にIndexedDBへ安全保存】（アプリが閉じても消えない）
             activeQueueRecordId = 'rec_' + Date.now();
@@ -940,6 +981,7 @@
             const category = document.getElementById('m-category').value;
             const company = document.getElementById('m-company').value;
             const attendees = document.getElementById('m-attendees').value.trim();
+            const notes = (document.getElementById('m-notes')?.value || '').trim();
 
             const record = {
               id: activeQueueRecordId,
@@ -947,9 +989,10 @@
               category: category,
               company: company,
               attendees: attendees,
+              notes: notes,
               audioBlob: mAudioBlob,
               audioName: mAudioName,
-              audioMime: 'audio/webm',
+              audioMime: recMime,
               sizeBytes: mAudioBlob.size,
               durationSec: mSeconds,
               createdAt: new Date().toISOString(),
@@ -1046,6 +1089,7 @@
         const category = document.getElementById('m-category').value;
         const company = document.getElementById('m-company').value;
         const attendees = document.getElementById('m-attendees').value.trim();
+        const notes = (document.getElementById('m-notes')?.value || '').trim();
 
         const record = {
           id: activeQueueRecordId,
@@ -1053,6 +1097,7 @@
           category: category,
           company: company,
           attendees: attendees,
+          notes: notes,
           audioBlob: file,
           audioName: file.name,
           audioMime: file.type || 'audio/m4a',
@@ -1102,12 +1147,13 @@
       const category = document.getElementById('m-category').value;
       const company = document.getElementById('m-company').value;
       const attendees = document.getElementById('m-attendees').value.trim();
+      const notes = (document.getElementById('m-notes')?.value || '').trim();
 
-      await executeGenerateApi(mAudioBlob, mAudioName, title, category, company, attendees, activeQueueRecordId);
+      await executeGenerateApi(mAudioBlob, mAudioName, title, category, company, attendees, activeQueueRecordId, notes);
     }
 
     // 実際のAPI送信・AI生成処理
-    async function executeGenerateApi(blob, filename, title, category, company, attendees, queueId) {
+    async function executeGenerateApi(blob, filename, title, category, company, attendees, queueId, notes = '') {
       const genBtn = document.getElementById('m-generate-btn');
       const loading = document.getElementById('m-loading-box');
       genBtn.disabled = true;
@@ -1129,7 +1175,8 @@
                 title: title,
                 category: category,
                 company: company,
-                attendees: attendees
+                attendees: attendees,
+                notes: notes || ''
               })
             });
             const d = await res.json();
@@ -1265,8 +1312,10 @@
       document.getElementById('m-category').value = item.category;
       setMobileCompaniesValue(item.company || '');
       document.getElementById('m-attendees').value = item.attendees;
+      const notesEl = document.getElementById('m-notes');
+      if (notesEl) notesEl.value = item.notes || '';
 
-      await executeGenerateApi(item.audioBlob, item.audioName, item.title, item.category, item.company, item.attendees, item.id);
+      await executeGenerateApi(item.audioBlob, item.audioName, item.title, item.category, item.company, item.attendees, item.id, item.notes || '');
     }
 
     // 全件一括同期
@@ -1298,7 +1347,7 @@
         pBar.style.width = `${Math.round(((i + 0.5) / total) * 100)}%`;
 
         try {
-          await executeGenerateApi(item.audioBlob, item.audioName, item.title, item.category, item.company, item.attendees, item.id);
+          await executeGenerateApi(item.audioBlob, item.audioName, item.title, item.category, item.company, item.attendees, item.id, item.notes || '');
           successCount++;
         } catch (e) {
           console.error('Queue item sync failed:', item.id, e);
