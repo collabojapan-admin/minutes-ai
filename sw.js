@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v15 - Multi-company chip selection & bulk Word routing)
-const CACHE_NAME = 'collabo-minutes-pwa-v15';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v16 - Network-First auto-update & Multi-company chip selection)
+const CACHE_NAME = 'collabo-minutes-pwa-v16';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
@@ -8,24 +8,32 @@ const ASSETS = [
   './icon.png'
 ];
 
-// インストール時にスマホ用資材をキャッシュ
+// インストール時にスマホ用資材をキャッシュ & 即時有効化
 self.addEventListener('install', event => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
       return cache.addAll(ASSETS).catch(err => {
         console.warn('Pre-cache warning:', err);
       });
-    }).then(() => self.skipWaiting())
+    })
   );
 });
 
-// 古いキャッシュを即時クリアし、全クライアントへ即時反映
+// 古いキャッシュを即時全削除し、全クライアントへ即時反映
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys => Promise.all(
       keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
     )).then(() => self.clients.claim())
   );
+});
+
+// メッセージハンドラ（即時アクティベーション用）
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 // フェッチ処理
@@ -51,36 +59,30 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 3. ページ遷移（HTML表示）
+  // 3. ページ遷移（HTML表示）: 【Network First】常に最新のHTMLを取得し、電波圏外のみキャッシュへフォールバック
   if (event.request.mode === 'navigate' || event.request.destination === 'document') {
     if (url.pathname.includes('manual')) {
       event.respondWith(
-        caches.match('./mobile_manual.html').then(cached => {
-          const networkFetch = fetch(event.request).then(resp => {
-            if (resp && resp.status === 200) {
-              const clone = resp.clone();
-              caches.open(CACHE_NAME).then(c => c.put('./mobile_manual.html', clone));
-            }
-            return resp;
-          }).catch(() => cached);
-          return cached || networkFetch;
-        })
+        fetch(event.request).then(resp => {
+          if (resp && resp.status === 200) {
+            const clone = resp.clone();
+            caches.open(CACHE_NAME).then(c => c.put('./mobile_manual.html', clone));
+          }
+          return resp;
+        }).catch(() => caches.match('./mobile_manual.html'))
       );
       return;
     }
 
     if (url.pathname.includes('mobile') || url.hostname.endsWith('github.io')) {
       event.respondWith(
-        caches.match('./mobile.html').then(cached => {
-          const networkFetch = fetch(event.request).then(resp => {
-            if (resp && resp.status === 200) {
-              const clone = resp.clone();
-              caches.open(CACHE_NAME).then(c => c.put('./mobile.html', clone));
-            }
-            return resp;
-          }).catch(() => cached);
-          return cached || networkFetch;
-        })
+        fetch(event.request).then(resp => {
+          if (resp && resp.status === 200) {
+            const clone = resp.clone();
+            caches.open(CACHE_NAME).then(c => c.put('./mobile.html', clone));
+          }
+          return resp;
+        }).catch(() => caches.match('./mobile.html'))
       );
       return;
     }
