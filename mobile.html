@@ -65,7 +65,7 @@
         </div>
         <div class="truncate flex items-center gap-1.5">
           <h1 class="text-xs font-bold text-white leading-tight truncate">議事録AI</h1>
-          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v16</span>
+          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v17</span>
         </div>
       </div>
 
@@ -133,28 +133,33 @@
             <input type="text" id="m-title" placeholder="例: 株式会社○○ 定期監査 / 内部定例" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500">
           </div>
 
-          <div class="grid grid-cols-2 gap-2">
-            <div>
-              <label class="block text-[11px] font-medium text-slate-400 mb-1">会議種別</label>
-              <select id="m-category" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500">
-                <option value="企業面談・定期監査">🏢 企業定期監査</option>
-                <option value="内部定例ミーティング" selected>👥 内部定例</option>
-                <option value="外国人面談・生活指導">🌏 外国人面談</option>
-                <option value="労基・機構・トラブル対応">⚖️ トラブル対応</option>
-                <option value="一般打ち合わせ">📝 一般打ち合わせ</option>
-              </select>
+          <!-- 会議種別 -->
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">会議種別</label>
+            <select id="m-category" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+              <option value="企業面談・定期監査">🏢 企業定期監査・巡回</option>
+              <option value="内部定例ミーティング" selected>👥 内部定例ミーティング</option>
+              <option value="外国人面談・生活指導">🌏 外国人面談・生活指導</option>
+              <option value="労基・機構・トラブル対応">⚖️ 労基・機構・トラブル対応</option>
+              <option value="一般打ち合わせ">📝 一般打ち合わせ</option>
+            </select>
+          </div>
+
+          <!-- 対象受入企業（フル幅で複数バッジも綺麗に並ぶデザイン） -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-[11px] font-medium text-slate-400 flex items-center gap-1">
+                <span>対象受入企業</span>
+                <span class="text-[10px] text-indigo-400 font-normal">（SSOT / 複数社選択可）</span>
+              </label>
+              <span class="text-[10px] text-slate-500">選択で自動追加</span>
             </div>
-            <div>
-              <div class="flex items-center justify-between mb-1">
-                <label class="text-[11px] font-medium text-slate-400">対象企業 (SSOT / 複数可)</label>
-                <span class="text-[9px] text-slate-500">選択で追加</span>
-              </div>
-              <select id="m-company-select" onchange="handleMobileCompanySelect(this)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-indigo-500">
-                <option value="">＋ 企業を追加...</option>
-              </select>
-              <div id="m-company-chips" class="flex flex-wrap gap-1.5 mt-1.5 min-h-[20px]"></div>
-              <input type="hidden" id="m-company" value="">
-            </div>
+            <select id="m-company-select" onchange="handleMobileCompanySelect(this)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+              <option value="">＋ 企業を選択して追加...</option>
+            </select>
+            <!-- 選択済み企業のバッジ表示エリア（未選択時は非表示でスッキリ） -->
+            <div id="m-company-chips" class="hidden flex-wrap gap-1.5 mt-2"></div>
+            <input type="hidden" id="m-company" value="">
           </div>
 
           <div>
@@ -336,7 +341,7 @@
     // PWA Service Worker 登録 & 新バージョン即時検知・自動アクティベート
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=16').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=17').then(reg => {
           reg.update(); // 起動時に即座に最新版があるかチェック
           reg.onupdatefound = () => {
             const installingWorker = reg.installing;
@@ -770,14 +775,18 @@
       hiddenInput.value = selectedMobileCompanies.join(' / ');
 
       if (selectedMobileCompanies.length === 0) {
-        chipsEl.innerHTML = '<span class="text-[10px] text-slate-500 italic py-0.5">（指定なし・内部）</span>';
+        chipsEl.innerHTML = '';
+        chipsEl.classList.remove('flex');
+        chipsEl.classList.add('hidden');
         return;
       }
 
+      chipsEl.classList.remove('hidden');
+      chipsEl.classList.add('flex');
       chipsEl.innerHTML = selectedMobileCompanies.map(c => `
-        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-950/90 border border-indigo-500/80 text-indigo-200 text-xs font-semibold shadow-md">
+        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/90 border border-indigo-500/80 text-indigo-200 text-xs font-semibold shadow-md">
           <span>🏢 ${c}</span>
-          <button type="button" onclick="removeMobileCompany('${c.replace(/'/g, "\\'")}')" class="text-indigo-400 hover:text-rose-400 ml-1 hover:bg-indigo-900/60 rounded px-1 transition text-xs font-bold" title="削除">✕</button>
+          <button type="button" onclick="removeMobileCompany('${c.replace(/'/g, "\\'")}')" class="text-indigo-400 hover:text-rose-400 ml-1 hover:bg-indigo-900/60 rounded px-1 transition text-xs font-bold" title="除外">✕</button>
         </span>
       `).join('');
     }
