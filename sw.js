@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v17 - Clean full-width company layout & Multi-chip selection)
-const CACHE_NAME = 'collabo-minutes-pwa-v17';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v18 - Transcript-First AI, Domain Guardrails, 128kbps Audio & Notes field)
+const CACHE_NAME = 'collabo-minutes-pwa-v18';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
