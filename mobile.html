@@ -65,7 +65,7 @@
         </div>
         <div class="truncate flex items-center gap-1.5">
           <h1 class="text-xs font-bold text-white leading-tight truncate">議事録AI</h1>
-          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v20</span>
+          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v21</span>
         </div>
       </div>
 
@@ -237,7 +237,7 @@
             </svg>
             <span id="m-loading-title">Gemini 3.5 Flash で解析・議事録作成中...</span>
           </div>
-          <p class="text-[10px] text-slate-400">※長尺音声も約15〜30秒で完了します</p>
+          <p id="m-loading-sub" class="text-[10px] text-slate-400">※1時間超の長尺録音もタイムアウトせずPC側で安全に完了します</p>
         </div>
       </div>
 
@@ -350,7 +350,7 @@
     // PWA Service Worker 登録 & 新バージョン即時検知・自動アクティベート
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=20').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=21').then(reg => {
           reg.update(); // 起動時に即座に最新版があるかチェック
           reg.onupdatefound = () => {
             const installingWorker = reg.installing;
@@ -1465,80 +1465,125 @@
       await executeGenerateApi(mAudioBlob, mAudioName, title, category, company, attendees, activeQueueRecordId, notes);
     }
 
-    // 実際のAPI送信・AI生成処理
+    // 実際のAPI送信・AI生成処理（生バイナリ高速転送 ＋ 非同期ジョブポーリングで100秒タイムアウトを完全回避）
     async function executeGenerateApi(blob, filename, title, category, company, attendees, queueId, notes = '') {
       const genBtn = document.getElementById('m-generate-btn');
       const loading = document.getElementById('m-loading-box');
+      const loadingTitle = document.getElementById('m-loading-title');
+      const loadingSub = document.getElementById('m-loading-sub');
       genBtn.disabled = true;
       genBtn.classList.add('opacity-50', 'cursor-not-allowed');
       loading.classList.remove('hidden');
+      if (loadingTitle) loadingTitle.textContent = '音声データをPCサーバーへ高速送信中...';
+      if (loadingSub) loadingSub.textContent = `サイズ: ${(blob.size / (1024 * 1024)).toFixed(2)} MB（生バイナリ転送）`;
 
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(blob);
-        reader.onloadend = async () => {
-          try {
-            const res = await fetch(getApiUrl('/api/minutes/generate'), {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                audio_base64: reader.result,
-                mime_type: blob.type || 'audio/webm',
-                filename: filename,
-                title: title,
-                category: category,
-                company: company,
-                attendees: attendees,
-                notes: notes || ''
-              })
-            });
-            const d = await res.json();
-            if (d.success) {
-              mMinutesId = d.minutes_id;
-              document.getElementById('m-editor').value = d.markdown;
-              document.getElementById('m-result-box').classList.remove('hidden');
-              document.getElementById('m-result-box').scrollIntoView({ behavior: 'smooth' });
+      try {
+        const metaHeader = encodeURIComponent(JSON.stringify({
+          filename: filename || 'recording.webm',
+          mime_type: blob.type || 'audio/webm',
+          title: title,
+          category: category,
+          company: company,
+          attendees: attendees,
+          notes: notes || '',
+          client_queue_id: queueId || '',
+          async: true
+        }));
 
-              // 【最重要】同一音声の二度押し・二重生成・サーバー重複保存を物理的に完全防止
-              mAudioBlob = null;
-              mAudioChunks = [];
-              activeQueueRecordId = null;
+        // 1. 生バイナリ直接送信（Base64膨張ゼロ・即座に job_id 返却）
+        const res = await fetch(getApiUrl('/api/minutes/generate_raw'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Minutes-Meta': metaHeader
+          },
+          body: blob
+        });
+        let d = await res.json();
 
-              // ボタンを「生成完了」ロック表示に変更
-              genBtn.disabled = true;
-              genBtn.className = 'w-full py-3.5 bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 rounded-xl text-xs font-bold shadow-lg transition flex items-center justify-center gap-2 cursor-default';
-              genBtn.innerHTML = '<span>✅</span> AI議事録の生成が完了しました（二重保存防止ロック中）';
-
-              // プレビュー表示更新
-              const sizeEl = document.getElementById('m-preview-size');
-              if (sizeEl) sizeEl.textContent = '（生成完了・Obsidian保管済）';
-
-              // キューの該当アイテムを削除または同期済みに更新
-              if (queueId) {
-                await dbDeleteRecording(queueId);
-                await refreshPendingQueue();
+        // 2. 非同期ジョブの場合は 3秒おきに軽量ポーリング（Cloudflare 100秒タイムアウト完全回避）
+        if (d.success && d.async && d.job_id) {
+          const jobId = d.job_id;
+          let consecutiveNetErr = 0;
+          let completedResult = null;
+          for (let attempt = 0; attempt < 300; attempt++) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+              const stRes = await fetch(getApiUrl(`/api/minutes/job_status?job_id=${encodeURIComponent(jobId)}&t=${Date.now()}`));
+              const st = await stRes.json();
+              consecutiveNetErr = 0;
+              if (st.status === 'completed' && st.result) {
+                completedResult = st.result;
+                break;
+              } else if (st.status === 'failed') {
+                throw new Error(st.error || 'AI議事録生成に失敗しました');
+              } else {
+                const sec = Math.round(st.elapsed_sec || ((attempt + 1) * 3));
+                if (loadingTitle) loadingTitle.textContent = `${st.stage || 'Gemini解析中...'}（${sec}秒経過）`;
+                if (loadingSub) loadingSub.textContent = '※PC側で安全に処理中です。長尺音声もタイムアウトせず完了します';
               }
-
-              showToast('AI議事録を生成しました！Obsidianにも自動同期完了。', 'success');
-              resolve(d);
-            } else {
-              showToast('生成エラー: ' + (d.error || ''), 'error');
-              reject(new Error(d.error));
-            }
-          } catch (err) {
-            showToast('通信エラー: ' + err.message, 'error');
-            reject(err);
-          } finally {
-            loading.classList.add('hidden');
-            // 音声データが残っている場合（失敗時など）のみ再試行可能に戻す
-            if (mAudioBlob) {
-              genBtn.disabled = false;
-              genBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-              updateGenerateBtnState();
+            } catch (pollErr) {
+              // 明確なジョブ失敗エラーは即throw、一時的なネットワーク瞬断は10回まで自動リトライ
+              if (pollErr && pollErr.message && pollErr.message.includes('失敗')) throw pollErr;
+              consecutiveNetErr++;
+              if (loadingTitle) loadingTitle.textContent = `通信再接続中...（リトライ ${consecutiveNetErr}/10）`;
+              if (consecutiveNetErr >= 10) {
+                throw new Error('通信が不安定になりました。PC側で生成が完了していれば次回読み込み時に自動同期されます。');
+              }
             }
           }
-        };
-      });
+          if (!completedResult) {
+            throw new Error('生成待機がタイムアウトしました。PC側アーカイブをご確認ください。');
+          }
+          d = completedResult;
+        }
+
+        if (d && d.success) {
+          mMinutesId = d.minutes_id;
+          document.getElementById('m-editor').value = d.markdown;
+          document.getElementById('m-result-box').classList.remove('hidden');
+          document.getElementById('m-result-box').scrollIntoView({ behavior: 'smooth' });
+
+          // 【最重要】同一音声の二度押し・二重生成・サーバー重複保存を物理的に完全防止
+          mAudioBlob = null;
+          mAudioChunks = [];
+          activeQueueRecordId = null;
+
+          // ボタンを「生成完了」ロック表示に変更
+          genBtn.disabled = true;
+          genBtn.className = 'w-full py-3.5 bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 rounded-xl text-xs font-bold shadow-lg transition flex items-center justify-center gap-2 cursor-default';
+          genBtn.innerHTML = '<span>✅</span> AI議事録の生成が完了しました（二重保存防止ロック中）';
+
+          // プレビュー表示更新
+          const sizeEl = document.getElementById('m-preview-size');
+          if (sizeEl) sizeEl.textContent = '（生成完了・Obsidian保管済）';
+
+          // キューの該当アイテムを確実に削除し、アーカイブ一覧も即時更新
+          if (queueId) {
+            await dbDeleteRecording(queueId);
+            await refreshPendingQueue();
+          }
+          loadMobileArchive();
+
+          showToast('AI議事録を生成しました！Obsidianにも自動同期完了。', 'success');
+          return d;
+        } else {
+          const errMsg = (d && d.error) || '生成エラー';
+          showToast('生成エラー: ' + errMsg, 'error');
+          throw new Error(errMsg);
+        }
+      } catch (err) {
+        showToast('通信・生成エラー: ' + err.message, 'error');
+        throw err;
+      } finally {
+        loading.classList.add('hidden');
+        if (loadingTitle) loadingTitle.textContent = 'Gemini 3.5 Flash で解析・議事録作成中...';
+        if (mAudioBlob) {
+          genBtn.disabled = false;
+          genBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+          updateGenerateBtnState();
+        }
+      }
     }
 
     // =========================================================================
@@ -1718,6 +1763,60 @@
       window.location.href = getApiUrl(`/api/minutes/download_docx?id=${encodeURIComponent(mMinutesId)}`);
     }
 
+    // 完了済みキュー自動クリーンアップ（PC側アーカイブに生成済みなら保留キューから自動消去）
+    async function reconcileCompletedQueueItems(archiveList) {
+      if (!Array.isArray(archiveList) || archiveList.length === 0) return 0;
+      try {
+        const pending = await dbGetAllRecordings();
+        if (!pending || pending.length === 0) return 0;
+
+        const completedQueueIds = new Set(
+          archiveList.map(r => (r.client_queue_id || '').trim()).filter(Boolean)
+        );
+        const genericTitles = new Set(['', '現場打ち合わせ', '無題の録音', '会議議事録']);
+
+        let cleaned = 0;
+        for (const item of pending) {
+          let isCompleted = false;
+
+          // 条件A: client_queue_id の完全一致（100%確実）
+          if (item.id && completedQueueIds.has(item.id)) {
+            isCompleted = true;
+          }
+
+          // 条件B: 旧方式で生成済みだった既存キューの救済（固有タイトル一致 ＋ 企業一致 ＋ 録音時刻後24時間以内に生成）
+          if (!isCompleted && item.title && !genericTitles.has(item.title.trim()) && item.createdAt) {
+            const recTimeMs = new Date(item.createdAt).getTime();
+            if (!isNaN(recTimeMs)) {
+              isCompleted = archiveList.some(r => {
+                if ((r.title || '').trim() !== item.title.trim()) return false;
+                if ((item.company || '').trim() && (r.company || '').trim() !== item.company.trim()) return false;
+                const archTimeStr = (r.created_at || '').replace(' ', 'T');
+                const archTimeMs = new Date(archTimeStr).getTime();
+                if (isNaN(archTimeMs)) return false;
+                const diffMs = archTimeMs - recTimeMs;
+                return diffMs >= 0 && diffMs <= 24 * 60 * 60 * 1000;
+              });
+            }
+          }
+
+          if (isCompleted) {
+            await dbDeleteRecording(item.id);
+            cleaned++;
+          }
+        }
+
+        if (cleaned > 0) {
+          await refreshPendingQueue();
+          showToast(`✅ PC側で生成済みの録音 ${cleaned}件を保留キューから自動整理しました`, 'info');
+        }
+        return cleaned;
+      } catch (e) {
+        console.warn('reconcileCompletedQueueItems warning:', e);
+        return 0;
+      }
+    }
+
     // アーカイブ履歴
     async function loadMobileArchive() {
       try {
@@ -1726,6 +1825,7 @@
         if (d.success && Array.isArray(d.minutes)) {
           mArchiveRecords = d.minutes;
           renderMobileArchive();
+          await reconcileCompletedQueueItems(d.minutes);
         }
       } catch (e) {}
     }
