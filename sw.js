@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v19 - MP4 Video & Fast Audio Extraction Support)
-const CACHE_NAME = 'collabo-minutes-pwa-v19';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v20 - 10s Delta Autosave, Crash Recovery, Interruption Detection & Trash Restore)
+const CACHE_NAME = 'collabo-minutes-pwa-v20';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
