@@ -65,7 +65,7 @@
         </div>
         <div class="truncate flex items-center gap-1.5">
           <h1 class="text-xs font-bold text-white leading-tight truncate">議事録AI</h1>
-          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v19</span>
+          <span class="text-[9px] px-1 py-0.2 bg-indigo-950 text-indigo-300 rounded border border-indigo-700/50 font-mono shrink-0">v20</span>
         </div>
       </div>
 
@@ -187,6 +187,10 @@
           <div id="m-wakelock-badge" class="hidden items-center justify-center gap-1 mt-1.5 text-[11px] font-medium text-amber-300 bg-amber-950/60 border border-amber-700/50 rounded-full px-3 py-0.5">
             <span>🔆</span> 画面スリープ防止中（机の上に置いたまま録音継続可能）
           </div>
+          <div id="m-autosave-badge" class="hidden items-center justify-center gap-1 mt-1 text-[10px] font-medium text-emerald-300 bg-emerald-950/60 border border-emerald-700/50 rounded-full px-3 py-0.5">
+            <span>🛡️</span> <span id="m-autosave-text">10秒ごと自動退避中</span>
+          </div>
+          <div id="m-audio-alert-banner" class="hidden mt-2 text-[11px] font-semibold text-rose-200 bg-rose-950/80 border border-rose-600/70 rounded-xl px-3 py-2 text-left leading-relaxed shadow-md"></div>
           <p id="m-offline-hint" class="text-[11px] text-slate-400 mt-1">※PCがシャットダウンしていてもスマホ単体で安全に録音できます</p>
         </div>
 
@@ -346,7 +350,7 @@
     // PWA Service Worker 登録 & 新バージョン即時検知・自動アクティベート
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=19').then(reg => {
+        navigator.serviceWorker.register('./sw.js?v=20').then(reg => {
           reg.update(); // 起動時に即座に最新版があるかチェック
           reg.onupdatefound = () => {
             const installingWorker = reg.installing;
@@ -373,11 +377,13 @@
     }
 
     // =========================================================================
-    // IndexedDB モジュール（大容量ローカル音声保管）
+    // IndexedDB モジュール（大容量ローカル音声保管 ＆ 10秒差分自動退避ドラフト）
     // =========================================================================
     const DB_NAME = 'CollaboMinutesDB';
-    const DB_VERSION = 1;
+    const DB_VERSION = 2;
     const STORE_NAME = 'pending_recordings';
+    const DRAFT_STORE = 'recording_drafts';
+    const CHUNK_STORE = 'recording_chunks';
 
     function openIndexedDB() {
       return new Promise((resolve, reject) => {
@@ -389,10 +395,128 @@
             store.createIndex('status', 'status', { unique: false });
             store.createIndex('createdAt', 'createdAt', { unique: false });
           }
+          if (!db.objectStoreNames.contains(DRAFT_STORE)) {
+            db.createObjectStore(DRAFT_STORE, { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains(CHUNK_STORE)) {
+            const cStore = db.createObjectStore(CHUNK_STORE, { keyPath: 'key' });
+            cStore.createIndex('draftId', 'draftId', { unique: false });
+          }
         };
         req.onsuccess = e => resolve(e.target.result);
         req.onerror = e => reject(e.target.error);
       });
+    }
+
+    async function dbPutDraftMeta(meta) {
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DRAFT_STORE, 'readwrite');
+        tx.objectStore(DRAFT_STORE).put(meta);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function dbAppendDraftChunk(draftId, seq, blob) {
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(CHUNK_STORE, 'readwrite');
+        tx.objectStore(CHUNK_STORE).put({ key: `${draftId}_${String(seq).padStart(6, '0')}`, draftId, seq, blob });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function dbGetAllDrafts() {
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DRAFT_STORE, 'readonly');
+        const req = tx.objectStore(DRAFT_STORE).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbGetDraftChunks(draftId) {
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(CHUNK_STORE, 'readonly');
+        const idx = tx.objectStore(CHUNK_STORE).index('draftId');
+        const req = idx.getAll(draftId);
+        req.onsuccess = () => {
+          const rows = (req.result || []).sort((a, b) => (a.seq || 0) - (b.seq || 0));
+          resolve(rows.map(r => r.blob).filter(Boolean));
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function dbDeleteDraft(draftId) {
+      if (!draftId) return;
+      const db = await openIndexedDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([DRAFT_STORE, CHUNK_STORE], 'readwrite');
+        tx.objectStore(DRAFT_STORE).delete(draftId);
+        const cStore = tx.objectStore(CHUNK_STORE);
+        const idx = cStore.index('draftId');
+        const cursorReq = idx.openKeyCursor(IDBKeyRange.only(draftId));
+        cursorReq.onsuccess = ev => {
+          const cursor = ev.target.result;
+          if (cursor) {
+            cStore.delete(cursor.primaryKey);
+            cursor.continue();
+          }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    // クラッシュ・タスクキル・強制終了で残った録音ドラフトを起動時に1本の音声ファイルへ自動復旧
+    async function recoverCrashedDrafts() {
+      try {
+        const drafts = await dbGetAllDrafts();
+        if (!drafts || drafts.length === 0) return 0;
+        let recovered = 0;
+        for (const d of drafts) {
+          const chunks = await dbGetDraftChunks(d.id);
+          if (chunks && chunks.length > 0) {
+            const mime = (d.audioMime || 'audio/webm').split(';')[0];
+            const ext = mime.includes('mp4') ? 'm4a' : 'webm';
+            const combinedBlob = new Blob(chunks, { type: mime });
+            if (combinedBlob.size > 0) {
+              const recId = 'rec_recovered_' + Date.now() + '_' + recovered;
+              const dateSlug = (d.createdAt || new Date().toISOString()).slice(0, 10);
+              const record = {
+                id: recId,
+                title: `【自動復旧】${d.title || '現場打ち合わせ'}`,
+                category: d.category || '内部定例ミーティング',
+                company: d.company || '',
+                attendees: d.attendees || '',
+                notes: d.notes || '',
+                audioBlob: combinedBlob,
+                audioName: `自動復旧録音_${dateSlug}_${recId.slice(-4)}.${ext}`,
+                audioMime: mime,
+                sizeBytes: combinedBlob.size,
+                durationSec: d.durationSec || 0,
+                createdAt: d.createdAt || new Date().toISOString(),
+                status: 'pending'
+              };
+              await dbSaveRecording(record);
+              recovered++;
+            }
+          }
+          await dbDeleteDraft(d.id);
+        }
+        if (recovered > 0) {
+          showToast(`🛡️ 前回中断された録音 ${recovered}件を1本の音声ファイルとして自動復旧しました（保留キュー）`, 'success');
+        }
+        return recovered;
+      } catch (e) {
+        console.warn('recoverCrashedDrafts warning:', e);
+        return 0;
+      }
     }
 
     async function dbSaveRecording(record) {
@@ -556,6 +680,7 @@
       }, 2500);
 
       try {
+        await recoverCrashedDrafts();
         await refreshPendingQueue();
       } catch (e) {
         console.warn('refreshPendingQueue error:', e);
@@ -958,58 +1083,258 @@
       }
     }
 
-    // 録音開始/停止トグル (100% オフラインセーフ ＆ スリープ耐性完備)
+    // ==========================================
+    // フェイルセーフ状態管理（10秒差分自動退避・着信切断検知・無音検知）
+    // ==========================================
+    let mDraftId = null;
+    let mDraftChunkSeq = 0;
+    let mFlushedChunkCount = 0;
+    let mAutosaveInterval = null;
+    let mInterruptionHandled = false;
+    let mAudioCtx = null;
+    let mSilenceInterval = null;
+    let mSilentSeconds = 0;
+
+    function showAudioAlert(msg) {
+      const el = document.getElementById('m-audio-alert-banner');
+      if (!el) return;
+      el.innerHTML = msg;
+      el.classList.remove('hidden');
+    }
+
+    function hideAudioAlert() {
+      const el = document.getElementById('m-audio-alert-banner');
+      if (!el) return;
+      el.classList.add('hidden');
+      el.innerHTML = '';
+    }
+
+    function startSilenceMonitor(stream) {
+      stopSilenceMonitor();
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        mAudioCtx = new AudioCtx();
+        const source = mAudioCtx.createMediaStreamSource(stream);
+        const analyser = mAudioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.fftSize);
+        mSilentSeconds = 0;
+
+        mSilenceInterval = setInterval(() => {
+          if (!mIsRecording) return;
+          analyser.getByteTimeDomainData(data);
+          let sumSq = 0;
+          for (let i = 0; i < data.length; i++) {
+            const v = (data[i] - 128) / 128;
+            sumSq += v * v;
+          }
+          const rms = Math.sqrt(sumSq / data.length);
+          if (rms < 0.0005) {
+            mSilentSeconds += 2;
+            if (mSilentSeconds >= 16) {
+              showAudioAlert('⚠️ <strong>マイク入力が無音の状態が続いています</strong><br>着信・画面ロック後のミュートやマイク権限をご確認ください。');
+            }
+          } else {
+            if (mSilentSeconds >= 16) hideAudioAlert();
+            mSilentSeconds = 0;
+          }
+        }, 2000);
+      } catch (e) {
+        console.warn('Silence monitor unavailable:', e);
+      }
+    }
+
+    function stopSilenceMonitor() {
+      if (mSilenceInterval) {
+        clearInterval(mSilenceInterval);
+        mSilenceInterval = null;
+      }
+      mSilentSeconds = 0;
+      if (mAudioCtx) {
+        mAudioCtx.close().catch(() => {});
+        mAudioCtx = null;
+      }
+    }
+
+    function buildCurrentDraftMeta(mime) {
+      return {
+        id: mDraftId,
+        title: document.getElementById('m-title').value.trim() || '現場打ち合わせ',
+        category: document.getElementById('m-category').value,
+        company: document.getElementById('m-company').value,
+        attendees: document.getElementById('m-attendees').value.trim(),
+        notes: (document.getElementById('m-notes')?.value || '').trim(),
+        audioMime: mime || 'audio/webm',
+        durationSec: mSeconds,
+        createdAt: new Date(mRecordStartTime || Date.now()).toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+    }
+
+    async function flushDraftDelta() {
+      if (!mIsRecording || !mDraftId) return;
+      const recMime = ((mMediaRecorder && mMediaRecorder.mimeType) || 'audio/webm').split(';')[0];
+      try {
+        if (mAudioChunks.length > mFlushedChunkCount) {
+          const deltaChunks = mAudioChunks.slice(mFlushedChunkCount);
+          const deltaBlob = new Blob(deltaChunks, { type: recMime });
+          mFlushedChunkCount = mAudioChunks.length;
+          if (deltaBlob.size > 0) {
+            await dbAppendDraftChunk(mDraftId, mDraftChunkSeq++, deltaBlob);
+          }
+        }
+        await dbPutDraftMeta(buildCurrentDraftMeta(recMime));
+        const txt = document.getElementById('m-autosave-text');
+        if (txt) {
+          const t = new Date().toTimeString().slice(0, 8);
+          txt.textContent = `10秒ごと自動退避済 (${t})`;
+        }
+      } catch (e) {
+        console.warn('Draft autosave warning:', e);
+      }
+    }
+
+    function resetRecordingUiToIdle() {
+      if (mTimerInterval) { clearInterval(mTimerInterval); mTimerInterval = null; }
+      if (mAutosaveInterval) { clearInterval(mAutosaveInterval); mAutosaveInterval = null; }
+      stopSilenceMonitor();
+      mIsRecording = false;
+      releaseWakeLock();
+      stopSilentAudio();
+
+      document.getElementById('m-record-icon').textContent = '⏺️';
+      document.getElementById('m-record-label').textContent = '再録音';
+      document.getElementById('m-record-btn').className = 'w-24 h-24 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center shadow-xl border-4 border-slate-900 transition-transform active:scale-95';
+      document.getElementById('m-pulse').classList.remove('flex');
+      document.getElementById('m-pulse').classList.add('hidden');
+      const wlBadge = document.getElementById('m-wakelock-badge');
+      if (wlBadge) { wlBadge.classList.remove('flex'); wlBadge.classList.add('hidden'); }
+      const asBadge = document.getElementById('m-autosave-badge');
+      if (asBadge) { asBadge.classList.remove('flex'); asBadge.classList.add('hidden'); }
+    }
+
+    async function finalizeAndSaveRecording(interruptedReason = '') {
+      const recMime = ((mMediaRecorder && mMediaRecorder.mimeType) || 'audio/webm').split(';')[0];
+      const recExt = recMime.includes('mp4') ? 'm4a' : 'webm';
+      mAudioBlob = new Blob(mAudioChunks, { type: recMime });
+      const prefix = interruptedReason ? '中断保護録音' : '現場録音';
+      mAudioName = `${prefix}_${new Date().toISOString().slice(0,10)}_${new Date().toTimeString().slice(0,8).replace(/:/g,'')}.${recExt}`;
+
+      if (mAudioBlob.size === 0) {
+        if (mDraftId) await dbDeleteDraft(mDraftId);
+        mDraftId = null;
+        return;
+      }
+
+      // 停止直後に【即座にIndexedDBへ1本の音声ファイルとして安全保存】
+      activeQueueRecordId = 'rec_' + Date.now();
+      const rawTitle = document.getElementById('m-title').value.trim() || '現場打ち合わせ';
+      const title = interruptedReason ? `【途中保存】${rawTitle}` : rawTitle;
+      const category = document.getElementById('m-category').value;
+      const company = document.getElementById('m-company').value;
+      const attendees = document.getElementById('m-attendees').value.trim();
+      const notes = (document.getElementById('m-notes')?.value || '').trim();
+
+      const record = {
+        id: activeQueueRecordId,
+        title: title,
+        category: category,
+        company: company,
+        attendees: attendees,
+        notes: notes,
+        audioBlob: mAudioBlob,
+        audioName: mAudioName,
+        audioMime: recMime,
+        sizeBytes: mAudioBlob.size,
+        durationSec: mSeconds,
+        createdAt: new Date().toISOString(),
+        status: 'pending'
+      };
+
+      await dbSaveRecording(record);
+      // 1本のファイルとして確定保存できたら一時ドラフトを掃除
+      if (mDraftId) {
+        await dbDeleteDraft(mDraftId);
+        mDraftId = null;
+      }
+      await refreshPendingQueue();
+      setMobilePreview(mAudioBlob, mAudioName);
+
+      if (interruptedReason) {
+        showAudioAlert(`⚠️ <strong>${interruptedReason}</strong><br>そこまでの音声は1本のファイルとして保留キューへ安全保存しました。続きを録音後、PCの「AI統合」で1つにまとめられます。`);
+        showToast('中断を検知し、そこまでの音声を安全保存しました！', 'success');
+      } else if (isServerOnline) {
+        showToast('録音完了！PCサーバーへ接続可能です。「AI生成」を押してください。', 'success');
+      } else {
+        showToast('録音完了！スマホ内に安全に保存しました（PC接続時に生成可能）。', 'success');
+      }
+    }
+
+    async function handleRecordingInterrupted(reason) {
+      if (!mIsRecording || mInterruptionHandled) return;
+      mInterruptionHandled = true;
+      resetRecordingUiToIdle();
+      try {
+        if (mMediaRecorder && mMediaRecorder.state !== 'inactive') {
+          mMediaRecorder._interruptedReason = reason;
+          mMediaRecorder.stop();
+          if (mMediaRecorder.stream) mMediaRecorder.stream.getTracks().forEach(t => t.stop());
+          return;
+        }
+      } catch (e) {}
+      await finalizeAndSaveRecording(reason);
+    }
+
+    // ページ終了直前にも未退避の差分チャンクを緊急保存
+    window.addEventListener('pagehide', () => {
+      if (mIsRecording && mDraftId) {
+        flushDraftDelta();
+      }
+    });
+
+    // 録音開始/停止トグル (100% オフラインセーフ ＆ 10秒差分退避・着信切断検知完備)
     async function toggleRecording() {
       if (!mIsRecording) {
         // 録音開始
         try {
+          hideAudioAlert();
           const stream = await getHighQualityAudioStream();
           mAudioChunks = [];
+          mDraftId = 'draft_' + Date.now();
+          mDraftChunkSeq = 0;
+          mFlushedChunkCount = 0;
+          mInterruptionHandled = false;
+
           mMediaRecorder = createHighQualityRecorder(stream);
+          mMediaRecorder._interruptedReason = '';
           mMediaRecorder.ondataavailable = e => {
             if (e.data && e.data.size > 0) mAudioChunks.push(e.data);
           };
-          mMediaRecorder.onstop = async () => {
-            const recMime = ((mMediaRecorder && mMediaRecorder.mimeType) || 'audio/webm').split(';')[0];
-            const recExt = recMime.includes('mp4') ? 'm4a' : 'webm';
-            mAudioBlob = new Blob(mAudioChunks, { type: recMime });
-            mAudioName = `現場録音_${new Date().toISOString().slice(0,10)}_${new Date().toTimeString().slice(0,8).replace(/:/g,'')}.${recExt}`;
-            
-            // 停止直後に【即座にIndexedDBへ安全保存】（アプリが閉じても消えない）
-            activeQueueRecordId = 'rec_' + Date.now();
-            const title = document.getElementById('m-title').value.trim() || '現場打ち合わせ';
-            const category = document.getElementById('m-category').value;
-            const company = document.getElementById('m-company').value;
-            const attendees = document.getElementById('m-attendees').value.trim();
-            const notes = (document.getElementById('m-notes')?.value || '').trim();
-
-            const record = {
-              id: activeQueueRecordId,
-              title: title,
-              category: category,
-              company: company,
-              attendees: attendees,
-              notes: notes,
-              audioBlob: mAudioBlob,
-              audioName: mAudioName,
-              audioMime: recMime,
-              sizeBytes: mAudioBlob.size,
-              durationSec: mSeconds,
-              createdAt: new Date().toISOString(),
-              status: 'pending'
-            };
-
-            await dbSaveRecording(record);
-            await refreshPendingQueue();
-
-            setMobilePreview(mAudioBlob, mAudioName);
-
-            if (isServerOnline) {
-              showToast('録音完了！PCサーバーへ接続可能です。「AI生成」を押してください。', 'success');
-            } else {
-              showToast('録音完了！スマホ内に安全に保存しました（PC接続時に生成可能）。', 'success');
-            }
+          mMediaRecorder.onerror = () => {
+            handleRecordingInterrupted('OSの制限または割り込みにより録音が中断されました');
           };
+          mMediaRecorder.onstop = async () => {
+            const reason = mMediaRecorder._interruptedReason || '';
+            await finalizeAndSaveRecording(reason);
+          };
+
+          // マイク強制切断（電話着信・画面ロック等）の即時監視
+          const audioTrack = stream.getAudioTracks()[0];
+          if (audioTrack) {
+            audioTrack.onended = () => {
+              handleRecordingInterrupted('着信・画面ロック等でマイク接続が終了しました');
+            };
+            audioTrack.onmute = () => {
+              if (mIsRecording) {
+                showAudioAlert('⚠️ <strong>着信や他アプリ割り込みによりマイクが一時ミュートされました</strong><br>通話終了後に音声が戻らない場合は一度「停止」を押してください（10秒ごとに自動退避済み）。');
+              }
+            };
+            audioTrack.onunmute = () => {
+              if (mIsRecording) hideAudioAlert();
+            };
+          }
 
           mMediaRecorder.start(1000);
           mIsRecording = true;
@@ -1017,7 +1342,13 @@
           mSeconds = 0;
           updateMobileTimer();
 
-          // スリープ・消灯防止（WakeLock取得 ＆ サイレントオーディオ再生開始）
+          // ドラフト初期メタ情報をIndexedDBへ即時作成し、10秒ごとに差分チャンクを追記退避
+          const initMime = ((mMediaRecorder && mMediaRecorder.mimeType) || 'audio/webm').split(';')[0];
+          await dbPutDraftMeta(buildCurrentDraftMeta(initMime));
+          mAutosaveInterval = setInterval(() => flushDraftDelta(), 10000);
+
+          // 無音監視・スリープ防止を開始
+          startSilenceMonitor(stream);
           await requestWakeLock();
           startSilentAudio();
 
@@ -1033,40 +1364,22 @@
           document.getElementById('m-pulse').classList.remove('hidden');
           document.getElementById('m-pulse').classList.add('flex');
           const wlBadge = document.getElementById('m-wakelock-badge');
-          if (wlBadge) {
-            wlBadge.classList.remove('hidden');
-            wlBadge.classList.add('flex');
-          }
-          showToast('マイク録音を開始しました（画面スリープ防止中）', 'info');
+          if (wlBadge) { wlBadge.classList.remove('hidden'); wlBadge.classList.add('flex'); }
+          const asBadge = document.getElementById('m-autosave-badge');
+          if (asBadge) { asBadge.classList.remove('hidden'); asBadge.classList.add('flex'); }
+          showToast('マイク録音を開始しました（スリープ防止＋10秒自動退避中）', 'info');
         } catch (err) {
           showToast('マイクアクセスが許可されていません: ' + err.message, 'error');
         }
       } else {
-        // 録音停止
+        // 録音停止（手動正常停止）
+        mInterruptionHandled = true;
         if (mMediaRecorder && mMediaRecorder.state !== 'inactive') {
+          mMediaRecorder._interruptedReason = '';
           mMediaRecorder.stop();
           mMediaRecorder.stream.getTracks().forEach(t => t.stop());
         }
-        if (mTimerInterval) {
-          clearInterval(mTimerInterval);
-          mTimerInterval = null;
-        }
-        mIsRecording = false;
-
-        // スリープ防止とサイレントオーディオを解除
-        releaseWakeLock();
-        stopSilentAudio();
-
-        document.getElementById('m-record-icon').textContent = '⏺️';
-        document.getElementById('m-record-label').textContent = '再録音';
-        document.getElementById('m-record-btn').className = 'w-24 h-24 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex flex-col items-center justify-center shadow-xl border-4 border-slate-900 transition-transform active:scale-95';
-        document.getElementById('m-pulse').classList.remove('flex');
-        document.getElementById('m-pulse').classList.add('hidden');
-        const wlBadge = document.getElementById('m-wakelock-badge');
-        if (wlBadge) {
-          wlBadge.classList.remove('flex');
-          wlBadge.classList.add('hidden');
-        }
+        resetRecordingUiToIdle();
       }
     }
 
@@ -1495,9 +1808,9 @@
       }
     }
 
-    // PWAアーカイブからの完全削除
+    // PWAアーカイブからの削除（ゴミ箱移動・30日間復元可能）
     async function deleteMobileArchive(id, btn) {
-      if (!confirm('この議事録を完全に削除しますか？\n（※Obsidianナレッジ・Word・一時音声・履歴がすべて消去されます）')) return;
+      if (!confirm('この議事録をゴミ箱へ移動しますか？\n（※一覧・Word・Obsidianから即座に消去されますが、30日以内ならPCコントロールセンターの「🗑️ ゴミ箱」から完全復元できます）')) return;
 
       const card = btn ? btn.closest('.bg-slate-950') : null;
       if (card) {
@@ -1514,7 +1827,7 @@
         });
         const d = await res.json();
         if (d.success) {
-          showToast('議事録を一括削除しました', 'info');
+          showToast('ゴミ箱へ移動しました（30日間はPCから復元可能）', 'info');
           if (card) card.remove();
           if (mMinutesId === id) {
             mMinutesId = '';
