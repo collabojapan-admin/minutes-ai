@@ -1,5 +1,5 @@
-// 協同組合コラボジャパン 議事録AI PWA Service Worker (v20 - 10s Delta Autosave, Crash Recovery, Interruption Detection & Trash Restore)
-const CACHE_NAME = 'collabo-minutes-pwa-v20';
+// 協同組合コラボジャパン 議事録AI PWA Service Worker (v21 - Async Job Polling, Raw Binary Upload & Queue Auto-Reconcile)
+const CACHE_NAME = 'collabo-minutes-pwa-v21';
 const ASSETS = [
   './mobile.html',
   './mobile_manual.html',
